@@ -1,0 +1,6 @@
+**
+!pyproject.toml
+!LICENSE
+!src/
+!src/abs_readwise_sync/
+!src/abs_readwise_sync/*.py
