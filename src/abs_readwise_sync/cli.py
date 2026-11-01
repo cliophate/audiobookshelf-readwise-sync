@@ -1,4 +1,4 @@
-"""Preview by default. All remote writes require --apply."""
+"""Preview by default. Book setup and session imports require --apply."""
 
 import argparse
 import asyncio
