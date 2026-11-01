@@ -1,0 +1,42 @@
+# Changelog
+
+## 0.1.1 - 2026-11-01
+
+### Fixed
+
+- A missing Audiobookshelf item no longer stops the whole sync. Its sessions are skipped as `missing_abs_item`, and other books continue. Failures on required account or session endpoints still stop the sync.
+- Invalid source records are skipped as `needs_review`. The local database keeps their original data and review history, including when a later poll omits them.
+- `IMPORT_SINCE` filters old sessions before book lookups and matching. Audiobookshelf session history still needs to be fetched, but older sessions no longer trigger unnecessary item requests or unmatched-book output.
+- Audio positions can be clipped by at most one second at the end of a book when the Audiobookshelf and Readwise lengths agree within one second. Larger differences remain `position_exceeds_length` errors. The original source position stays in the checkpoint to prevent repeat imports.
+
+### Added
+
+- `--issues` lists unresolved source problems from the local database without contacting either service.
+- Errors identify the failing endpoint without including credentials or response bodies. Length errors include the source position and both book lengths in the preview.
+- Startup logs show the version and source revision so an outdated Docker image is easier to spot.
+- Prebuilt Docker image archives for Linux amd64 and arm64, with checksums and a Compose override for loading them on a NAS.
+- Regression coverage for missing items, retained review records, import cutoffs, and audio length rounding. All 57 tests pass in the release images for both architectures.
+
+## 0.1.0 - 2026-10-31
+
+Initial source publication, extracted from the personal Bookstats integration.
+
+- Imports historical and new Audiobookshelf listening sessions through the documented Readwise Books API.
+- Uses a regular Readwise API token by default. Optional app session credentials enable automatic book setup.
+- Supports explicit book mappings and conservative title-and-author matching.
+- Previews imports before writing. SQLite checkpoints track submitted sessions and later additions to existing sessions.
+- Keeps feed posting off by default, with date limits for users who enable it.
+- Includes Docker Compose setup, background polling, and credential-file support.
+
+## Updating
+
+Keep the existing `data` directory when updating. It contains the import checkpoints, mappings, and review records.
+
+For a source build, rebuild the image and recreate the container so Docker uses the updated code:
+
+```sh
+docker compose build --pull --no-cache
+docker compose up -d
+```
+
+For a prebuilt image, follow the image-loading instructions in the [README](README.md). Check the startup log for the expected version after either update method.

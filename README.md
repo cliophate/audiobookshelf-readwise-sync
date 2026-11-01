@@ -10,6 +10,8 @@ This is an early standalone release extracted from a personal reading stats app.
 
 Version 0.1.1 fixes item-level 404 handling and filters old sessions before looking up their books. Skipped records are retained locally for review. Startup logs show the running version and source revision.
 
+See the [changelog](CHANGELOG.md) for version history and update instructions.
+
 ## What it does
 
 - Imports individual listening sessions, including their original dates and audio positions.
