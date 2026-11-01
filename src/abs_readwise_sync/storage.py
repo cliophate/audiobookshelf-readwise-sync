@@ -8,6 +8,7 @@ from contextlib import contextmanager
 
 from .config import SyncError
 from .exporter import ensure_schema
+from .audio_sources import ensure_issues, save_issue, source_key
 
 
 @contextmanager
@@ -24,6 +25,7 @@ def database(settings):
         try:
             con.execute("pragma foreign_keys=on")
             ensure_schema(con)
+            ensure_issues(con)
             con.executescript("""
                 create table if not exists identity(key text primary key,value text not null);
                 create table if not exists source_sessions(id text primary key,data_json text not null);
@@ -67,13 +69,16 @@ def bind_identity(con, settings, user_id, *, accept_token_change=False):
 
 def cache_bundle(con, bundle):
     with con:
-        con.execute("delete from source_sessions")
         con.executemany(
-            "insert into source_sessions values(?,?)",
-            [(s["id"], json.dumps(s)) for s in bundle["sessions"]],
+            "insert into source_sessions values(?,?) on conflict(id) do update set data_json=excluded.data_json",
+            [
+                (source_key(s), json.dumps(s))
+                for s in bundle.get("source_records", bundle["sessions"])
+            ],
         )
-        con.execute("delete from source_items")
         con.executemany(
-            "insert into source_items values(?,?)",
+            "insert into source_items values(?,?) on conflict(id) do update set data_json=excluded.data_json",
             [(key, json.dumps(value)) for key, value in bundle["items"].items()],
         )
+        for issue in bundle.get("issues", []):
+            save_issue(con, issue)

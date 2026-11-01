@@ -12,6 +12,7 @@ from .clients import ABSClient, AppClient, BooksClient
 from .config import SyncError
 from .matching import item_metadata, same_work
 from .storage import bind_identity, cache_bundle, database
+from .audio_sources import fit_audio_endpoint, save_issue, resolve_issue, source_issue
 
 
 def positive_length(value):
@@ -88,7 +89,20 @@ def build_plan(con, settings, bundle, books, sessions, now=None):
     plans = []
     occupied = list(sessions)
     for item_id, sources in sorted(by_item.items()):
-        metadata = item_metadata(bundle["items"][item_id])
+        detail = bundle["items"].get(item_id)
+        metadata = (
+            item_metadata(detail)
+            if detail
+            else {
+                "title": sources[0].get("displayTitle")
+                or (sources[0].get("mediaMetadata") or {}).get("title")
+                or "Unavailable ABS item",
+                "author": sources[0].get("displayAuthor")
+                or (sources[0].get("mediaMetadata") or {}).get("author")
+                or "",
+                "duration": sources[0].get("duration"),
+            }
+        )
         book, state = resolve_book(con, item_id, metadata, books, mappings)
         length = positive_length((book or {}).get("manual_total_seconds"))
         source_length = positive_length(metadata["duration"])
@@ -106,6 +120,8 @@ def build_plan(con, settings, bundle, books, sessions, now=None):
         )
         if (setup and setup[0] != "confirmed") or unfinished_length:
             state = "setup_needs_review"
+        if item_id in bundle.get("missing_items", []):
+            state = "missing_abs_item"
         plan = {
             "abs_item_id": item_id,
             "title": metadata["title"],
@@ -116,8 +132,17 @@ def build_plan(con, settings, bundle, books, sessions, now=None):
             "readwise_length_seconds": length,
             "sessions": [],
         }
-        for source in sorted(sources, key=lambda s: s.get("startedAt") or 0):
+        for source in sorted(sources, key=lambda s: float(s.get("startedAt") or 0)):
             row = {"source_id": source["id"], "status": state}
+            if state == "missing_abs_item":
+                row["reason"] = next(
+                    (
+                        i["reason"]
+                        for i in bundle.get("issues", [])
+                        if i["source_id"] == source["id"]
+                    ),
+                    "ABS library item is unavailable.",
+                )
             try:
                 started = float(source["startedAt"]) / 1000
                 updated = float(source["updatedAt"]) / 1000
@@ -129,13 +154,29 @@ def build_plan(con, settings, bundle, books, sessions, now=None):
                     row["status"] = "before_import_since"
                 elif updated > now.timestamp() - settings.settle_minutes * 60:
                     row["status"] = "recent"
-                elif state == "setup_needs_review":
+                elif state in ("setup_needs_review", "missing_abs_item"):
                     pass
                 elif book:
                     candidate = exporter.next_source(con, source, book["id"])
                     if candidate is None:
                         row["status"] = "existing"
                     else:
+                        adjusted = False
+                        if length:
+                            try:
+                                candidate, adjusted = fit_audio_endpoint(
+                                    candidate, metadata["duration"], length
+                                )
+                            except ValueError as exc:
+                                row.update(
+                                    status="position_exceeds_length",
+                                    reason=str(exc),
+                                    abs_position_seconds=float(candidate["currentTime"]),
+                                    abs_length_seconds=metadata["duration"],
+                                    readwise_length_seconds=length,
+                                )
+                                plan["sessions"].append(row)
+                                continue
                         item = exporter.payload(
                             candidate,
                             book["id"],
@@ -145,7 +186,13 @@ def build_plan(con, settings, bundle, books, sessions, now=None):
                         row.update(
                             audio_seconds=item["seconds_at_end"] - item["seconds_at_start"],
                             listening_seconds=round(float(candidate["timeListening"])),
+                            started_at=item["started_at"],
+                            ended_at=item["ended_at"],
+                            seconds_at_start=item["seconds_at_start"],
+                            seconds_at_end=item["seconds_at_end"],
                         )
+                        if adjusted:
+                            row["endpoint_adjusted"] = True
                         if not length:
                             row["status"] = "needs_length"
                         elif item["seconds_at_end"] > length:
@@ -158,13 +205,32 @@ def build_plan(con, settings, bundle, books, sessions, now=None):
                             occupied.append(item)
             except (ValueError, KeyError, TypeError, OverflowError):
                 row["status"] = "needs_review"
+                row["reason"] = "Source timing, identity, or previous submission needs review."
             plan["sessions"].append(row)
         plans.append(plan)
     return plans
 
 
-def report(plans, mode, result=None):
+def retain_plan_issues(con, plans, bundle):
+    sources = {s["id"]: s for s in bundle["sessions"]}
+    with con:
+        for plan in plans:
+            for row in plan["sessions"]:
+                if row["status"] in ("ready", "existing"):
+                    resolve_issue(con, row["source_id"])
+                elif row["status"] not in ("recent", "before_import_since"):
+                    reason = row.get("reason") or row["status"]
+                    save_issue(con, source_issue(sources[row["source_id"]], row["status"], reason))
+
+
+def report(plans, mode, result=None, bundle=None):
     summary = Counter(s["status"] for p in plans for s in p["sessions"])
+    bundle = bundle or {}
+    planned_ids = {s["source_id"] for p in plans for s in p["sessions"]}
+    unique_issues = {i["source_id"]: i for i in bundle.get("issues", [])}
+    summary.update(i["status"] for sid, i in unique_issues.items() if sid not in planned_ids)
+    if bundle.get("excluded_by_cutoff"):
+        summary["before_import_since"] += bundle["excluded_by_cutoff"]
     public = [
         {
             **p,
@@ -174,7 +240,15 @@ def report(plans, mode, result=None):
         }
         for p in plans
     ]
-    return {"mode": mode, "summary": dict(summary), "books": public, "result": result or {}}
+    issues = [{k: v for k, v in i.items() if k != "source"} for i in unique_issues.values()]
+    return {
+        "mode": mode,
+        "summary": dict(summary),
+        "books": public,
+        "result": result or {},
+        "source_issues": issues,
+        "excluded_by_cutoff": bundle.get("excluded_by_cutoff", 0),
+    }
 
 
 async def run_once(settings, *, apply=False, transport=None, delay=3.1, accept_token_change=False):
@@ -184,7 +258,7 @@ async def run_once(settings, *, apply=False, transport=None, delay=3.1, accept_t
             api = BooksClient(http, settings.readwise_token, delay)
             app = AppClient(http, settings.app_session, delay) if settings.app_session else None
             # Do not export anything until a complete fresh ABS fetch succeeds.
-            bundle = await abs_client.fetch()
+            bundle = await abs_client.fetch(settings.import_since)
             books = await api.list("/books")
             sessions = await api.list("/sessions", include_deleted="true")
             bind_identity(con, settings, bundle["user_id"], accept_token_change=accept_token_change)
@@ -192,8 +266,9 @@ async def run_once(settings, *, apply=False, transport=None, delay=3.1, accept_t
             if apply:
                 reconcile(con, sessions)
             plans = build_plan(con, settings, bundle, books, sessions)
+            retain_plan_issues(con, plans, bundle)
             if not apply:
-                return report(plans, "preview")
+                return report(plans, "preview", bundle=bundle)
             if app:
                 for plan in plans:
                     if not any(
@@ -218,6 +293,7 @@ async def run_once(settings, *, apply=False, transport=None, delay=3.1, accept_t
                             settings.timezone,
                         )
                 plans = build_plan(con, settings, bundle, books, sessions)
+                retain_plan_issues(con, plans, bundle)
             pending = []
             with con:
                 for plan in plans:
@@ -238,4 +314,4 @@ async def run_once(settings, *, apply=False, transport=None, delay=3.1, accept_t
                 counts.update(r["status"] for r in results)
                 if any(r["status"] != "confirmed" for r in results):
                     break
-            return report(plans, "apply", dict(counts))
+            return report(plans, "apply", dict(counts), bundle)

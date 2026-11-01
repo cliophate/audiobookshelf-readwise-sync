@@ -8,6 +8,8 @@ The default setup uses your regular Readwise API token. An extra app session cre
 
 This is an early standalone release extracted from a personal reading stats app. The original integration runs daily; this extracted version has automated HTTP tests and a Docker build check. It has not yet had a separate live-account trial. Start with the preview and check a small import before enabling the background worker.
 
+Version 0.1.1 fixes item-level 404 handling and filters old sessions before looking up their books. Skipped records are retained locally for review. Startup logs show the running version and source revision.
+
 ## What it does
 
 - Imports individual listening sessions, including their original dates and audio positions.
@@ -80,6 +82,7 @@ Common statuses:
 | `existing` | This source session has already been imported. |
 | `remote_overlap` | An existing or planned audiobook session overlaps. Review before importing. |
 | `position_exceeds_length` | Check the edition and audiobook length. |
+| `missing_abs_item` | ABS no longer returns this library item. Other books can still import; the source record stays in the review journal. |
 | `before_import_since` | Excluded by your history cutoff. |
 | `mapping_changed` | A previously imported item now points to another book. Review its ledger. |
 | `book_unavailable` | A mapped book is missing or deleted in Readwise Books. |
@@ -124,6 +127,40 @@ docker compose logs --tail=50 sync
 Plain `docker compose up -d` runs previews only. The worker performs a poll immediately, then waits `POLL_MINUTES` after each poll completes. Typical listening appears about 45 to 60 minutes after it stops, plus API request time.
 
 Stop the worker with `docker compose stop sync`. Nothing is deleted from either service.
+
+### NAS and prebuilt images
+
+The [v0.1.1 release](https://github.com/cliophate/audiobookshelf-readwise-sync/releases/tag/v0.1.1) provides tagged Docker image archives for `linux-amd64` and `linux-arm64`. Choose the one matching your NAS. Import it in Container Manager, or load it with Docker:
+
+```sh
+docker load --input audiobookshelf-readwise-sync-v0.1.1-linux-amd64.tar.gz
+```
+
+The image is named `audiobookshelf-readwise-sync:0.1.1`. Use the normal configuration above, with the image override:
+
+```sh
+docker compose -f compose.yaml -f compose.image.yaml run --rm sync --json
+docker compose -f compose.yaml -f compose.image.yaml run --rm sync --apply
+docker compose -f compose.yaml -f compose.image.yaml -f compose.apply.yaml up -d --no-build
+```
+
+No registry account is needed. SHA-256 checksum files accompany both downloads. A 32-bit ARM NAS is not supported by these images.
+
+If building from source instead, pull the updated code, run `docker compose build sync`, then recreate only the sync service using the same overrides you normally use. Reusing an old container does not load the rebuilt code. The startup banner identifies the version actually running.
+
+### Inspect skipped records
+
+```sh
+docker compose run --rm sync --issues
+```
+
+This reads the local review journal without contacting either service. `needs_review`, `missing_abs_item` and duration mismatch records retain their original source data in `source_issues`. The command lists IDs, reasons and observation dates. If a source becomes usable again, its issue is marked resolved; its journal row is retained. Export ledgers and checkpoints are never deleted to clear an error.
+
+An item-specific 404 can be skipped. A 404, authentication failure, network failure or invalid response on a required account/session endpoint still stops the run. Error messages identify the endpoint path without printing tokens, full URLs or response bodies.
+
+`IMPORT_SINCE` now excludes old sessions before item metadata requests, matching and per-book output. The full paginated ABS session list is still read, since the endpoint does not offer the cutoff used by this tool. Older cached sources and review records remain available locally.
+
+For end-position rounding, the sync clips at most one second only when ABS's book length and Readwise's saved length also agree within one second. It keeps the unmodified ABS observation in the checkpoint, so later polls do not repeat that session. Larger mismatches remain `position_exceeds_length`, with the ABS position and both lengths in the preview. It never stretches a 98% session to 100% or marks a book finished on that basis.
 
 ## Optional automatic book setup
 

@@ -169,7 +169,7 @@ class Server:
         raise AssertionError(f"Unexpected request: {request.method} {request.url}")
 
 
-class SyncTests(unittest.IsolatedAsyncioTestCase):
+class SyncFixture:
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
@@ -200,6 +200,8 @@ class SyncTests(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(con.close)
         return con
 
+
+class SyncTests(SyncFixture, unittest.IsolatedAsyncioTestCase):
     async def test_token_only_preview_then_backfill_then_repeat_without_duplicates(self):
         preview = await self.run_sync()
         self.assertEqual(preview["summary"], {"ready": 1})

@@ -1,11 +1,14 @@
 """HTTP clients with fixed Readwise origins and no automatic write retries."""
 
 import asyncio
+from collections import Counter
 from urllib.parse import quote, urlsplit
 
 import httpx
+from . import __version__
 
 from .config import SyncError
+from .audio_sources import source_issue, validate_source
 
 READWISE_BASE = "https://readwise.io/books/api/v1"
 APP_BASE = "https://readwise.io/bookwise/api"
@@ -38,7 +41,7 @@ class BooksClient:
                 url,
                 headers={
                     "Authorization": "Token " + self.token,
-                    "User-Agent": "audiobookshelf-readwise-sync/0.1",
+                    "User-Agent": "audiobookshelf-readwise-sync/" + __version__,
                 },
                 follow_redirects=False,
                 **kwargs,
@@ -147,7 +150,7 @@ class ABSClient:
     def __init__(self, http, url, token):
         self.http, self.url, self.token = http, url, token
 
-    async def get(self, path, **params):
+    async def get(self, path, *, allow_missing=False, **params):
         try:
             response = await self.http.get(
                 self.url + path,
@@ -156,21 +159,25 @@ class ABSClient:
                 follow_redirects=False,
             )
         except httpx.HTTPError:
-            raise SyncError("Cannot reach Audiobookshelf. Nothing was exported.") from None
+            raise SyncError(
+                f"Cannot reach Audiobookshelf GET {path}. Nothing was exported."
+            ) from None
+        if response.status_code == 404 and allow_missing:
+            return None
         if response.status_code != 200:
             raise SyncError(
-                f"Audiobookshelf returned HTTP {response.status_code}. Nothing was exported."
+                f"Audiobookshelf GET {path} returned HTTP {response.status_code}. Nothing was exported."
             )
         try:
             return response.json()
         except ValueError:
             raise SyncError("Audiobookshelf returned an invalid response.") from None
 
-    async def fetch(self):
+    async def fetch(self, import_since=None):
         me = await self.get("/api/me")
         if not isinstance(me, dict) or not me.get("id"):
             raise SyncError("Audiobookshelf did not identify the current user.")
-        sessions, ids, page = [], set(), 0
+        all_sessions, page = [], 0
         while True:
             data = await self.get("/api/me/listening-sessions", itemsPerPage=100, page=page)
             if (
@@ -182,25 +189,58 @@ class ABSClient:
                 raise SyncError("Audiobookshelf returned incomplete session pagination.")
             for session in data["sessions"]:
                 if (
-                    not isinstance(session, dict)
-                    or not session.get("id")
-                    or not session.get("libraryItemId")
-                    or session["id"] in ids
+                    isinstance(session, dict)
+                    and session.get("userId") is not None
+                    and str(session["userId"]) != str(me["id"])
                 ):
-                    raise SyncError("Audiobookshelf returned invalid or duplicate sessions.")
-                if session.get("userId") is not None and str(session["userId"]) != str(me["id"]):
                     raise SyncError("Audiobookshelf returned a session for another user.")
-                ids.add(session["id"])
-                sessions.append(session)
+                all_sessions.append(session)
             page += 1
             if page >= data["numPages"]:
                 break
-        items = {}
+        counts = Counter(
+            s.get("id")
+            for s in all_sessions
+            if isinstance(s, dict) and isinstance(s.get("id"), str)
+        )
+        sessions, issues, excluded = [], [], 0
+        for source in all_sessions:
+            if isinstance(source, dict) and source.get("mediaType", "book") != "book":
+                continue
+            reason = validate_source(source)
+            if not reason and counts[source["id"]] > 1:
+                reason = "Audiobookshelf returned a duplicate source ID."
+            if reason:
+                issues.append(source_issue(source, "needs_review", reason))
+            elif import_since and float(source["startedAt"]) / 1000 < import_since.timestamp():
+                excluded += 1
+            else:
+                sessions.append(source)
+        items, missing = {}, []
         for item_id in sorted(
             {str(s["libraryItemId"]) for s in sessions if s.get("mediaType", "book") == "book"}
         ):
-            detail = await self.get("/api/items/" + quote(item_id, safe=""), expanded=1)
+            path = "/api/items/" + quote(item_id, safe="")
+            detail = await self.get(path, allow_missing=True, expanded=1)
+            if detail is None:
+                missing.append(item_id)
+                issues.extend(
+                    source_issue(
+                        s, "missing_abs_item", f"Audiobookshelf GET {path} returned HTTP 404."
+                    )
+                    for s in sessions
+                    if str(s["libraryItemId"]) == item_id
+                )
+                continue
             if not isinstance(detail, dict) or str(detail.get("id")) != item_id:
                 raise SyncError("Audiobookshelf returned the wrong library item.")
             items[item_id] = detail
-        return {"user_id": str(me["id"]), "sessions": sessions, "items": items}
+        return {
+            "user_id": str(me["id"]),
+            "sessions": sessions,
+            "items": items,
+            "source_records": all_sessions,
+            "issues": issues,
+            "missing_items": missing,
+            "excluded_by_cutoff": excluded,
+        }
