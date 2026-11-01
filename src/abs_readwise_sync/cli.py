@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import json
 import os
+from pathlib import Path
 import signal
 import sys
 
@@ -12,11 +13,26 @@ import httpx
 from . import __version__
 from .clients import BooksClient
 from .config import Settings, SyncError
+from .login import login
 from .sync import run_once
 from .storage import database
 
 
 async def run(args):
+    if getattr(args, "login", False):
+        if os.getenv("READWISE_APP_SESSION", "").strip():
+            raise SyncError("Unset READWISE_APP_SESSION before using file-based device login.")
+        path = os.getenv("READWISE_APP_SESSION_FILE", "").strip()
+        if not path:
+            path = str(Path(os.getenv("DATA_DIR", "./data")) / "readwise-session")
+        async with httpx.AsyncClient(timeout=30, trust_env=False) as http:
+            try:
+                await login(http, path, replace=args.replace_session)
+            except OSError:
+                raise SyncError(
+                    "Cannot save the app credential. Check data-directory ownership and permissions."
+                ) from None
+        return 0
     settings = Settings.load()
     if args.issues:
         with database(settings) as con:
@@ -131,6 +147,14 @@ def main():
     parser.add_argument("--watch", action="store_true", help="repeat at POLL_MINUTES intervals")
     parser.add_argument("--json", action="store_true", help="include session details as JSON")
     parser.add_argument(
+        "--login", action="store_true", help="approve an optional app login on your phone"
+    )
+    parser.add_argument(
+        "--replace-session",
+        action="store_true",
+        help="replace an existing app credential with --login",
+    )
+    parser.add_argument(
         "--issues",
         action="store_true",
         help="list retained unresolved source issues without HTTP requests",
@@ -144,6 +168,12 @@ def main():
         help="confirm a replacement Readwise token belongs to the same account; preview only",
     )
     args = parser.parse_args()
+    if args.replace_session and not args.login:
+        parser.error("--replace-session requires --login")
+    if args.login and any(
+        (args.apply, args.watch, args.json, args.list_books, args.accept_token_change, args.issues)
+    ):
+        parser.error("Run --login separately from sync, preview and inspection commands")
     if (args.list_books or args.accept_token_change or args.issues) and (args.apply or args.watch):
         parser.error(
             "--list-books, --issues and --accept-token-change cannot be combined with --apply or --watch"

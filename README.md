@@ -8,7 +8,7 @@ The default setup uses your regular Readwise API token. An extra app session cre
 
 This is an early standalone release extracted from a personal reading stats app. The original integration runs daily; this extracted version has automated HTTP tests and a Docker build check. It has not yet had a separate live-account trial. Start with the preview and check a small import before enabling the background worker.
 
-Version 0.1.1 fixes item-level 404 handling and filters old sessions before looking up their books. Skipped records are retained locally for review. Startup logs show the running version and source revision.
+Version 0.1.2 adds a device-approval login for optional automatic book setup. It saves the app credential locally after you approve the login on your phone. The earlier missing-item and import-cutoff fixes are included.
 
 See the [changelog](CHANGELOG.md) for version history and update instructions.
 
@@ -132,13 +132,13 @@ Stop the worker with `docker compose stop sync`. Nothing is deleted from either 
 
 ### NAS and prebuilt images
 
-The [v0.1.1 release](https://github.com/cliophate/audiobookshelf-readwise-sync/releases/tag/v0.1.1) provides tagged Docker image archives for `linux-amd64` and `linux-arm64`. Choose the one matching your NAS. Import it in Container Manager, or load it with Docker:
+The [v0.1.2 release](https://github.com/cliophate/audiobookshelf-readwise-sync/releases/tag/v0.1.2) provides tagged Docker image archives for `linux-amd64` and `linux-arm64`. Choose the one matching your NAS. Import it in Container Manager, or load it with Docker:
 
 ```sh
-docker load --input audiobookshelf-readwise-sync-v0.1.1-linux-amd64.tar.gz
+docker load --input audiobookshelf-readwise-sync-v0.1.2-linux-amd64.tar.gz
 ```
 
-The image is named `audiobookshelf-readwise-sync:0.1.1`. Use the normal configuration above, with the image override:
+The image is named `audiobookshelf-readwise-sync:0.1.2`. Use the normal configuration above, with the image override:
 
 ```sh
 docker compose -f compose.yaml -f compose.image.yaml run --rm sync --json
@@ -166,13 +166,39 @@ For end-position rounding, the sync clips at most one second only when ABS's boo
 
 ## Optional automatic book setup
 
-If you already have a valid session credential for your own Readwise Books app login, save it in `data/readwise-session`. It can be the bare session value or JSON containing `sessionid`. Set file permissions to 600, then add this to `.env`:
+Use device approval to obtain the extra app credential. Update to version 0.1.2 or later first. From your project directory, run:
+
+```sh
+docker compose run --rm sync --login
+```
+
+For a prebuilt NAS image, include the image override:
+
+```sh
+docker compose -f compose.yaml -f compose.image.yaml run --rm sync --login
+```
+
+Open the printed approval link on the phone where you are signed into Readwise Books. Approve **Audiobookshelf Readwise sync** using the same account as your regular Readwise API token. If the HTTPS link opens an app-download page, try the printed `bookwise://device/...` link on that phone. This fallback worked with the Android app in the original integration; iOS approval has not been tested.
+
+Leave the command running while you approve. It waits for up to ten minutes, then saves the credential in `data/readwise-session` with permissions 600. It never prints the credential. Keep the temporary approval links private too. If approval times out, rerun the command for a fresh link.
+
+Then add this to `.env` and leave `READWISE_APP_SESSION` unset:
 
 ```dotenv
 READWISE_APP_SESSION_FILE=/data/readwise-session
 ```
 
-This is a session for the same Readwise account. It does not require a second account or an administrator login. The normal Readwise API token is still required for session imports. This project does not include a login flow for obtaining the optional credential.
+Check a preview with `docker compose run --rm sync --json`, including the image override if needed. Then recreate the worker with the same Compose overrides you normally use. Your regular Readwise API token is still required for session imports. Device login does not need your ABS token or Readwise API token and does not import listening sessions.
+
+If an existing app credential returns `Readwise app returned HTTP 401`, renew it with:
+
+```sh
+docker compose run --rm sync --login --replace-session
+```
+
+Include `-f compose.yaml -f compose.image.yaml` for a prebuilt NAS image. The command keeps the old credential until approval succeeds, then replaces it. Recreate the worker afterward so it reads the replacement. Your import ledger and mappings stay in place. Session lifetime is not confirmed, and there is no automatic renewal.
+
+If you already have a valid app credential, you can still save the bare value or JSON containing `sessionid` in `data/readwise-session` yourself, with permissions 600. The login command uses `READWISE_APP_SESSION_FILE` when set, otherwise `DATA_DIR/readwise-session`. It never reads or displays an old credential.
 
 With the credential present, `--apply` can search the app catalog, add a book when there is one exact title-and-author match, and save a missing audiobook length. Catalog results with multiple matching editions remain for manual setup. The preview performs no app writes or automatic setup.
 

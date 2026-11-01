@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.2 - 2026-11-01
+
+### Added
+
+- `--login` starts Readwise Books device approval. Open the printed link on your signed-in phone and approve the device to save the optional app credential locally with permissions 600. No passwords or existing API tokens are needed for this command.
+- `--login --replace-session` renews an expired or rejected app credential. A failed approval leaves the previous file intact. The credential never appears in terminal output, and the command leaves import history and mappings alone.
+- Instructions for source builds and prebuilt NAS images, including the direct app link that worked on Android in the original integration. The login endpoints are internal, session lifetime is unconfirmed, and iOS approval remains untested.
+
+### Fixed
+
+- Optional app HTTP 401 errors now point to the renewal command. The earlier setup instructions assumed an existing app credential without explaining how to obtain one.
+
 ## 0.1.1 - 2026-11-01
 
 ### Fixed

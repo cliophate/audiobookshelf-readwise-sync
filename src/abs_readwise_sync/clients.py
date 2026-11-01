@@ -131,6 +131,11 @@ class AppClient:
                 kwargs.pop("params", None)
                 continue
             if response.status_code not in (200, 201, 204):
+                if response.status_code == 401:
+                    raise SyncError(
+                        "Readwise app returned HTTP 401. Run --login --replace-session "
+                        "to renew the optional app credential, then recreate the worker."
+                    )
                 raise SyncError(
                     f"Readwise app returned HTTP {response.status_code}. Check the optional session credential."
                 )
