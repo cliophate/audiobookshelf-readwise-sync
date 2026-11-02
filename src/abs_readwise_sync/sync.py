@@ -10,6 +10,7 @@ import httpx
 from . import exporter, optional, shelves
 from .clients import ABSClient, AppClient, BooksClient
 from .config import SyncError
+from .durations import saved_audio_length
 from .matching import item_metadata, same_work
 from .storage import bind_identity, cache_bundle, database
 from .audio_sources import fit_audio_endpoint, save_issue, resolve_issue, source_issue
@@ -114,7 +115,7 @@ def build_plan(con, settings, bundle, books, sessions, now=None):
         book, state = resolve_book(con, item_id, metadata, books, mappings)
         if state == "unmatched" and item_id in bundle.get("ambiguous_catalog", []):
             state = "ambiguous"
-        length = positive_length((book or {}).get("manual_total_seconds"))
+        length = saved_audio_length((book or {}).get("manual_total_seconds"))
         source_length = positive_length(metadata["duration"])
         if book and not length:
             state = "needs_length"
@@ -321,7 +322,10 @@ async def run_once(settings, *, apply=False, transport=None, delay=3.1, accept_t
                         s["status"] in ("unmatched", "needs_length") for s in plan["sessions"]
                     )
                     shelf_setup = plan.get("shelf", {}).get("status") == "needs_book"
-                    if not session_setup and not shelf_setup:
+                    finish_setup = plan.get("shelf", {}).get("desired") == "finished" and plan.get(
+                        "shelf", {}
+                    ).get("status") in ("needs_length", "needs_book")
+                    if not session_setup and not shelf_setup and not finish_setup:
                         continue
                     metadata = item_metadata(bundle["items"][plan["abs_item_id"]])
                     book, state = resolve_book(
@@ -335,7 +339,11 @@ async def run_once(settings, *, apply=False, transport=None, delay=3.1, accept_t
                             bundle.setdefault("ambiguous_catalog", []).append(plan["abs_item_id"])
                         if book:
                             books.append(book)
-                    if book and session_setup and positive_length(metadata["duration"]):
+                    if (
+                        book
+                        and (session_setup or finish_setup)
+                        and positive_length(metadata["duration"])
+                    ):
                         length_result = await optional.ensure_length(
                             con,
                             api,
@@ -348,6 +356,11 @@ async def run_once(settings, *, apply=False, transport=None, delay=3.1, accept_t
                             bundle.setdefault("setup_notes", {})[plan["abs_item_id"]] = (
                                 "An active manual session prevented audiobook length setup. "
                                 "Finish or cancel it in Readwise Books, then retry."
+                            )
+                        elif length_result == "needs_review":
+                            bundle.setdefault("setup_notes", {})[plan["abs_item_id"]] = (
+                                "A previous audiobook length setup needs review. "
+                                "It will not be repeated automatically. Keep the local ledger."
                             )
                 plans = build_plan(con, settings, bundle, books, sessions)
                 retain_plan_issues(con, plans, bundle)

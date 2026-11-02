@@ -11,9 +11,11 @@ import sys
 import httpx
 
 from . import __version__
+from .audit import audit_book
 from .clients import BooksClient
 from .config import Settings, SyncError
 from .login import login
+from .permissions import access_message
 from .sync import run_once
 from .storage import database
 
@@ -28,10 +30,20 @@ async def run(args):
         async with httpx.AsyncClient(timeout=30, trust_env=False) as http:
             try:
                 await login(http, path, replace=args.replace_session)
-            except OSError:
+            except PermissionError:
                 raise SyncError(
-                    "Cannot save the app credential. Check data-directory ownership and permissions."
+                    access_message("saving the optional app credential", path)
                 ) from None
+            except OSError as exc:
+                raise SyncError(
+                    access_message(
+                        f"saving the optional app credential, OS error {exc.errno}", path
+                    )
+                ) from None
+        return 0
+    if getattr(args, "audit", None):
+        settings = Settings.load(include_app=False)
+        print(json.dumps(await audit_book(settings, args.audit), indent=2, allow_nan=False))
         return 0
     settings = Settings.load()
     if args.issues:
@@ -148,11 +160,12 @@ async def run(args):
         except (SyncError, ValueError, KeyError, TypeError, OSError, RuntimeError) as exc:
             # Only SyncError messages are approved for display. HTTP bodies and URLs
             # can contain private data; do not print arbitrary exception messages.
-            message = (
-                str(exc)
-                if isinstance(exc, SyncError)
-                else type(exc).__name__ + ". Check configuration and state."
-            )
+            if isinstance(exc, SyncError):
+                message = str(exc)
+            elif isinstance(exc, PermissionError):
+                message = access_message("accessing sync files", settings.data_dir)
+            else:
+                message = type(exc).__name__ + ". Check configuration and state."
             print("Sync stopped: " + message, file=sys.stderr, flush=True)
             if not args.watch:
                 return 1
@@ -175,6 +188,11 @@ def main():
     parser.add_argument("--watch", action="store_true", help="repeat at POLL_MINUTES intervals")
     parser.add_argument("--json", action="store_true", help="include session details as JSON")
     parser.add_argument(
+        "--audit",
+        metavar="ABS_ITEM_ID",
+        help="read-only comparison of one book's ABS, ledger and Readwise sessions",
+    )
+    parser.add_argument(
         "--login", action="store_true", help="approve an optional app login on your phone"
     )
     parser.add_argument(
@@ -196,6 +214,18 @@ def main():
         help="confirm a replacement Readwise token belongs to the same account; preview only",
     )
     args = parser.parse_args()
+    if args.audit and any(
+        (
+            args.apply,
+            args.watch,
+            args.login,
+            args.replace_session,
+            args.issues,
+            args.list_books,
+            args.accept_token_change,
+        )
+    ):
+        parser.error("Run --audit separately from login, imports and other inspection commands")
     if args.replace_session and not args.login:
         parser.error("--replace-session requires --login")
     if args.login and any(

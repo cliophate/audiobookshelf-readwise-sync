@@ -8,7 +8,7 @@ The default setup uses your regular Readwise API token. An extra app session cre
 
 This is an early standalone release extracted from a personal reading stats app. The original integration runs daily; this extracted version has automated HTTP tests and a Docker build check. It has not yet had a separate live-account trial. Start with the preview and check a small import before enabling the background worker.
 
-Version 0.1.3 adds optional ABS-driven shelves, an item allowlist for large libraries, primary-title matching, and clearer missing-duration guidance. Device-approval login and the earlier missing-item fixes are included.
+Version 0.1.4 blocks Finished until the saved audiobook duration is verified, reports filesystem access problems with paths and ownership, and adds a read-only per-book session audit. Optional shelves, book selection and device login are included.
 
 See the [changelog](CHANGELOG.md) for version history and update instructions.
 
@@ -136,13 +136,13 @@ Stop the worker with `docker compose stop sync`. Nothing is deleted from either 
 
 ### NAS and prebuilt images
 
-The [v0.1.3 release](https://github.com/cliophate/audiobookshelf-readwise-sync/releases/tag/v0.1.3) provides tagged Docker image archives for `linux-amd64` and `linux-arm64`. Choose the one matching your NAS. Import it in Container Manager, or load it with Docker:
+The [v0.1.4 release](https://github.com/cliophate/audiobookshelf-readwise-sync/releases/tag/v0.1.4) provides tagged Docker image archives for `linux-amd64` and `linux-arm64`. Choose the one matching your NAS. Import it in Container Manager, or load it with Docker:
 
 ```sh
-docker load --input audiobookshelf-readwise-sync-v0.1.3-linux-amd64.tar.gz
+docker load --input audiobookshelf-readwise-sync-v0.1.4-linux-amd64.tar.gz
 ```
 
-The image is named `audiobookshelf-readwise-sync:0.1.3`. Use the normal configuration above, with the image override:
+The image is named `audiobookshelf-readwise-sync:0.1.4`. Use the normal configuration above, with the image override:
 
 ```sh
 docker compose -f compose.yaml -f compose.image.yaml run --rm sync --json
@@ -196,6 +196,10 @@ SYNC_SHELVES=true
 
 Completion comes from ABS's explicit flag. Reaching 98%, 99% or even 100% without that flag does not mark a book finished.
 
+Finished also requires a valid saved Readwise audiobook duration. A missing, zero, fractional, boolean, string or out-of-range value blocks both the Finished update and new session imports. With app automation enabled, the sync can save a missing or invalid duration from ABS, cancel its temporary setup timer and re-fetch the book to verify the saved value before proceeding. This also covers selected completed books with no new listening sessions.
+
+An active manual timer, failed setup, uncertain cancellation or failed verification keeps Finished blocked. A source position above the saved duration also blocks Finished for review. The sync checks the duration again immediately before a Finished shelf write and holds the change if it has changed since planning. Want to Read and Currently Reading do not require an audio duration. Existing Finished shelves are not automatically reversed or repaired by this update.
+
 Run the usual preview first. It shows the current shelf, proposed shelf and any review reason. Shelf changes require `--apply`. They use the [documented Books API](https://readwise.io/books_api#update-books) and need only your regular Readwise API token for books already in your Readwise library. Adding a missing book automatically still needs the optional app login.
 
 With no allowlist, shelf sync covers books with eligible listening history plus books already bound in the local sync ledger. This lets an imported book's shelf update after you tighten `IMPORT_SINCE`. To include a book you have never started, explicitly include its ID in `ABS_ITEM_IDS`. The sync never imports every untouched book from your library automatically.
@@ -248,7 +252,7 @@ If you already have a valid app credential, you can still save the bare value or
 
 With the credential present, `--apply` can search the app catalog, add a book when there is one exact title-and-author match, and save a missing audiobook length. Catalog results with multiple matching editions remain for manual setup. The preview performs no app writes or automatic setup.
 
-Saving a length uses the app's manual-session workflow: start a temporary audiobook session, cancel it immediately, verify the saved length, and restore any affected shelf or dates. It leaves existing lengths alone and does not interrupt an active manual session. A failed or uncertain setup blocks that book for review, including when the length was saved but cancellation failed.
+Saving a length uses the app's manual-session workflow: start a temporary audiobook session, cancel it immediately, verify the saved length, and restore any affected shelf or dates. It leaves valid existing lengths alone and does not interrupt an active manual session. A failed or uncertain setup blocks that book for review, including when the length was saved but cancellation failed.
 
 The optional paths use `/bookwise/api/`, which is an internal app API and can change independently of the official API. Remove the setting to return to token-only operation. Credentials that expire need replacing. Never send a session credential to someone helping you set this up.
 
@@ -263,6 +267,34 @@ Existing audiobook sessions with overlapping timestamps are held for review. Thi
 When ABS extends a previously imported session, only its added listening time and forward position span are sent. ABS does not provide an exact resume timestamp here, so the new interval starts at the previous exported end. Any idle gap becomes paused time.
 
 Deleting an imported session in Readwise Books does not make the sync recreate it. Its ledger entry remains. New listening can still import afterward.
+
+## Investigate an inflated listening total
+
+Use the ABS item ID for one affected book:
+
+```sh
+docker compose run --rm sync --audit ABS_ITEM_ID
+```
+
+For a prebuilt NAS image:
+
+```sh
+docker compose -f compose.yaml -f compose.image.yaml run --rm sync --audit ABS_ITEM_ID
+```
+
+The audit makes GET requests and opens an existing ledger read-only. It never imports, deletes, edits, creates a database or clears checkpoints. It works without the optional app credential. Pause the worker for a stable comparison; the ledger snapshot and live service reads happen at different times.
+
+The JSON report includes ABS listening seconds and audio positions, confirmed local exports and their Readwise session IDs, active Readwise totals by format, repeated audio ranges, identical session groups and ABS items sharing the same Readwise book. It also shows deleted remote sessions separately. It omits credentials, reviews, captions and raw response bodies, but contains listening dates and positions. Review it before sharing.
+
+Readwise's [documented session API](https://readwise.io/books_api) computes audiobook time from end position minus start position. It does not use wall-clock listening time or the supplied pause duration for that total. The audit keeps this figure separate from ABS's `timeListening`. Repeated ranges may reflect re-listening, seeks or cumulative source data. Sessions without a ledger ID may be manual entries or imports completed during the audit. Neither observation alone proves a duplicate. This release does not change the accounting rules or remove existing sessions.
+
+## Permission and NAS storage errors
+
+Storage errors now identify the operation, file path, container UID/GID, and the path and parent ownership and modes when available. This covers credentials, mappings, the sync lock, inaccessible or read-only SQLite storage, and device-login storage. File contents and arbitrary exception text stay out of the error.
+
+Check that `PUID` and `PGID` match the NAS user who owns the bind-mounted `data` directory. Check NAS ACLs and whether the mount is read-only too. A mode such as `777` does not establish why an operation failed, and this tool does not reject a sync database merely for having that mode. Do not loosen permissions to work around an error. Keep credential files at `600` in a private directory; the tool never changes existing permissions or ownership to recover from an access failure.
+
+Device login verifies that its new temporary credential file has mode `600` before writing the credential. If a filesystem forces broader permissions, login stops and leaves an existing credential untouched. Use a private folder or mount that supports owner-only permissions.
 
 ## Settings and credentials
 

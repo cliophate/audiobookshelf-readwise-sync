@@ -178,7 +178,15 @@ class ABSClient:
         except ValueError:
             raise SyncError("Audiobookshelf returned an invalid response.") from None
 
-    async def fetch(self, import_since=None, *, item_ids=(), managed_ids=(), sync_shelves=False):
+    async def fetch(
+        self,
+        import_since=None,
+        *,
+        item_ids=(),
+        managed_ids=(),
+        sync_shelves=False,
+        include_items=(),
+    ):
         me = await self.get("/api/me")
         if not isinstance(me, dict) or not me.get("id"):
             raise SyncError("Audiobookshelf did not identify the current user.")
@@ -230,6 +238,7 @@ class ABSClient:
                 sessions.append(source)
         items, missing = {}, []
         selected = {str(s["libraryItemId"]) for s in sessions}
+        selected.update(include_items)
         if sync_shelves:
             selected.update(item_ids or managed_ids)
         for item_id in sorted(selected):

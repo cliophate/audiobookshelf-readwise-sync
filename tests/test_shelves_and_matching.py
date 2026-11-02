@@ -68,7 +68,7 @@ class MatchingTests(unittest.TestCase):
         self.assertTrue(same_work(a, {"title": "", "author": "", "product": a}))
 
 
-class ShelfTests(SyncFixture, unittest.IsolatedAsyncioTestCase):
+class ShelfFixture(SyncFixture):
     def setUp(self):
         super().setUp()
         self.progress = {
@@ -116,6 +116,8 @@ class ShelfTests(SyncFixture, unittest.IsolatedAsyncioTestCase):
     def shelf_writes(self):
         return [r for r in self.server.writes if r.method == "PATCH"]
 
+
+class ShelfTests(ShelfFixture, unittest.IsolatedAsyncioTestCase):
     async def test_shelves_default_off_without_progress_requests_or_shelf_writes(self):
         await self.run_sync(apply=True)
         self.assertEqual(self.shelf_writes(), [])
@@ -374,12 +376,13 @@ class ShelfTests(SyncFixture, unittest.IsolatedAsyncioTestCase):
         self.assertIn("active manual session", result["books"][0]["length_help"])
         self.assertEqual(self.server.writes, [])
 
-    async def test_shelf_changes_do_not_require_a_manual_audio_length_or_app_credential(self):
+    async def test_finished_and_imports_wait_for_a_saved_manual_audio_length(self):
         self.enable()
         self.server.books[0]["manual_total_seconds"] = None
         result = await self.run_sync(apply=True)
         self.assertEqual(result["summary"], {"needs_length": 1})
-        self.assertEqual(result["shelf_summary"], {"confirmed": 1})
+        self.assertEqual(result["shelf_summary"], {"needs_length": 1})
+        self.assertEqual(self.shelf_writes(), [])
         self.assertEqual(self.server.sessions, [])
         self.assertFalse(any("/bookwise/api/" in r.url.path for r in self.server.requests))
 

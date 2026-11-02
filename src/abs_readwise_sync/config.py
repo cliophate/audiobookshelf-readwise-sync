@@ -8,6 +8,8 @@ from pathlib import Path
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from .permissions import access_message, local_call
+
 
 class SyncError(Exception):
     """An error whose message can be shown without exposing credentials."""
@@ -21,6 +23,8 @@ def credential(name, *, required=True):
     if file:
         try:
             value = Path(file).read_text().strip()
+        except PermissionError:
+            raise SyncError(access_message(f"reading {name}_FILE", file)) from None
         except OSError:
             raise SyncError(f"Cannot read {name}_FILE.") from None
     if name == "READWISE_APP_SESSION" and value.startswith("{"):
@@ -78,7 +82,7 @@ class Settings:
     abs_item_ids: tuple[str, ...] = ()
 
     @classmethod
-    def load(cls):
+    def load(cls, *, include_app=True):
         url = os.getenv("AUDIOBOOKSHELF_URL", "").rstrip("/")
         parsed = urlsplit(url)
         if (
@@ -113,7 +117,7 @@ class Settings:
             url,
             credential("AUDIOBOOKSHELF_TOKEN"),
             credential("READWISE_TOKEN"),
-            credential("READWISE_APP_SESSION", required=False),
+            credential("READWISE_APP_SESSION", required=False) if include_app else "",
             data,
             Path(os.getenv("MAPPINGS_FILE", str(data / "mappings.json"))),
             minutes("POLL_MINUTES", 15),
@@ -125,7 +129,9 @@ class Settings:
         )
 
     def mappings(self):
-        if not self.mappings_file.exists():
+        try:
+            local_call("checking book mappings", self.mappings_file, self.mappings_file.stat)
+        except FileNotFoundError:
             return {}
         try:
             data = json.loads(self.mappings_file.read_text())
@@ -141,6 +147,8 @@ class Settings:
             ):
                 raise ValueError
             return {k: str(v) for k, v in data.items()}
+        except PermissionError:
+            raise SyncError(access_message("reading book mappings", self.mappings_file)) from None
         except (OSError, ValueError, TypeError):
             raise SyncError(
                 "Mappings must be JSON mapping ABS item IDs to Readwise library book IDs."

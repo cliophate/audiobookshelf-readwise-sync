@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.1.4 - 2026-11-02
+
+### Fixed
+
+- Finished shelf changes require a valid saved audiobook duration. Optional setup can repair missing or invalid values and verifies the saved duration before imports and completion. Selected completed books without new sessions also get this check. Failed or uncertain setup stays blocked for review.
+- Finished checks the fresh duration before writing, and blocks changes if the duration changed or a source position exceeds it. Other shelves remain independent of audio duration.
+- Filesystem access errors identify the operation, path, UID/GID, ownership and modes without reading file contents or loosening permissions. SQLite access failures and read-only mounts have storage diagnostics.
+- Device login verifies mode `600` before writing a new credential. A filesystem that forces broader permissions cannot receive the credential; replacement leaves the previous file intact on failure.
+
+### Added
+
+- `--audit ABS_ITEM_ID` compares one book's live ABS history, local export ledger and Readwise sessions. It is read-only and reports listening time, audio covered, totals by format, repeated ranges, identical session groups and shared mappings. No history is deleted or repaired automatically.
+- Regression coverage for a seven-hour cumulative source across repeated updates. It exports seven audio hours, rather than the sum of full cumulative snapshots. The reported 29-hour case still needs the affected book's audit output; no accounting change is claimed for it.
+
 ## 0.1.3 - 2026-11-02
 
 ### Added

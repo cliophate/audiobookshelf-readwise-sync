@@ -15,6 +15,7 @@ import httpx
 
 from .clients import APP_BASE
 from .config import SyncError
+from .permissions import access_message
 
 
 def check_destination(path, replace):
@@ -35,6 +36,7 @@ def save_session(path, session, replace):
     fd, temporary = tempfile.mkstemp(prefix=".readwise-login-", dir=path.parent)
     try:
         with os.fdopen(fd, "w") as stream:
+            require_private_mode(stream.fileno(), path)
             stream.write(json.dumps({"sessionid": session}) + "\n")
             stream.flush()
             os.fsync(stream.fileno())
@@ -46,6 +48,15 @@ def save_session(path, session, replace):
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
+
+
+def require_private_mode(fd, path):
+    if stat.S_IMODE(os.fstat(fd).st_mode) != 0o600:
+        raise SyncError(
+            "The filesystem did not honor mode 600 for the credential file. "
+            "Use a private NAS folder or mount that enforces owner-only permissions. "
+            + access_message("checking private credential storage", path)
+        )
 
 
 async def request(http, path, body):
@@ -86,8 +97,8 @@ async def login(
     check_destination(path, replace)
     # Check directory access before asking someone to approve a login.
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    with tempfile.TemporaryFile(dir=path.parent):
-        pass
+    with tempfile.TemporaryFile(dir=path.parent) as probe:
+        require_private_mode(probe.fileno(), path)
     start = await request(
         http,
         "start",

@@ -9,14 +9,42 @@ from contextlib import contextmanager
 from .config import SyncError
 from .exporter import ensure_schema
 from .audio_sources import ensure_issues, save_issue, source_key
+from .permissions import access_message, local_call
 
 
 @contextmanager
 def database(settings):
-    settings.data_dir.mkdir(parents=True, exist_ok=True)
-    with (settings.data_dir / ".sync.lock").open("a") as lock:
+    try:
+        with _database(settings) as con:
+            yield con
+    except sqlite3.OperationalError as exc:
+        if getattr(exc, "sqlite_errorcode", 0) & 255 in (
+            sqlite3.SQLITE_CANTOPEN,
+            sqlite3.SQLITE_READONLY,
+        ):
+            raise SyncError(
+                access_message(
+                    "opening or writing the sync database", settings.data_dir / "sync.sqlite"
+                )
+            ) from None
+        raise
+
+
+@contextmanager
+def _database(settings):
+    local_call(
+        "creating the sync data directory",
+        settings.data_dir,
+        lambda: settings.data_dir.mkdir(parents=True, exist_ok=True, mode=0o700),
+    )
+    lock_path = settings.data_dir / ".sync.lock"
+    with local_call("opening the sync lock", lock_path, lambda: lock_path.open("a")) as lock:
         try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            local_call(
+                "locking the sync data directory",
+                lock_path,
+                lambda: fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB),
+            )
         except BlockingIOError:
             raise SyncError(
                 "Another sync or preview is running. Try again after it finishes."

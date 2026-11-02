@@ -3,6 +3,7 @@
 import json
 
 from .config import SyncError
+from .durations import saved_audio_length
 from .matching import same_work
 
 
@@ -45,7 +46,7 @@ async def add_book(con, api, app, item_id, source):
 
 async def ensure_length(con, api, app, book, length, timezone):
     """Save a missing length, cancel the temporary session, restore shelf/dates."""
-    if book.get("manual_total_seconds") is not None:
+    if saved_audio_length(book.get("manual_total_seconds")):
         return "existing"
     con.execute("""create table if not exists length_attempts(
         book_id text primary key,length integer,status text,session_id text,previous_json text)""")
@@ -86,10 +87,10 @@ async def ensure_length(con, api, app, book, length, timezone):
             "A manual session is still active after length setup. Review it in the app."
         )
     fresh_books = await api.list("/books", ids=bid)
-    if len(fresh_books) != 1:
+    if len(fresh_books) != 1 or str(fresh_books[0]["id"]) != bid:
         raise SyncError("Cannot verify the audiobook length.")
     fresh = fresh_books[0]
-    if fresh.get("manual_total_seconds") != length:
+    if saved_audio_length(fresh.get("manual_total_seconds")) != length:
         raise SyncError("The app did not save the expected audiobook length.")
     changes = {
         k: book.get(k)
@@ -101,7 +102,12 @@ async def ensure_length(con, api, app, book, length, timezone):
         if len(result["results"]) != 1 or result["results"][0].get("error"):
             raise SyncError("Could not restore the original shelf and reading dates.")
         fresh_books = await api.list("/books", ids=bid)
-        if len(fresh_books) != 1 or any(fresh_books[0].get(k) != v for k, v in changes.items()):
+        if (
+            len(fresh_books) != 1
+            or str(fresh_books[0]["id"]) != bid
+            or any(fresh_books[0].get(k) != v for k, v in changes.items())
+            or saved_audio_length(fresh_books[0].get("manual_total_seconds")) != length
+        ):
             raise SyncError("Shelf and date restoration needs review.")
         fresh = fresh_books[0]
     if any(fresh.get(k) != book.get(k) for k in ("rating", "review")):

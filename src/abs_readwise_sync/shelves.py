@@ -5,6 +5,7 @@ import json
 import math
 
 from .config import SyncError
+from .durations import saved_audio_length
 
 PROTECTED = ("rating", "review", "started_reading_at", "finished_reading_at")
 
@@ -73,6 +74,19 @@ def annotate(con, plans, bundle, books):
         elif not book:
             shelf["status"] = "needs_book"
             shelf["reason"] = "Add and map the book, or enable optional automatic book setup."
+        elif shelf["desired"] == "finished" and not saved_audio_length(
+            book.get("manual_total_seconds")
+        ):
+            shelf["status"] = "needs_length"
+            shelf["reason"] = (
+                "Finished is blocked until the Readwise audiobook length is saved and verified."
+            )
+        elif shelf["desired"] == "finished" and any(
+            row["status"] == "position_exceeds_length" for row in plan["sessions"]
+        ):
+            shelf["reason"] = (
+                "Finished is blocked because an audio position exceeds the saved length."
+            )
         else:
             shelf["status"] = "unchanged" if shelf["current"] == shelf["desired"] else "ready"
 
@@ -88,6 +102,24 @@ async def apply(con, api, plans):
             shelf.update(status="needs_review", reason="Cannot read the selected Readwise book.")
             continue
         before = fresh[0]
+        if shelf["desired"] == "finished" and not saved_audio_length(
+            before.get("manual_total_seconds")
+        ):
+            shelf.update(
+                status="needs_length",
+                reason="The saved audiobook length is missing or invalid on the fresh read. Finished is blocked.",
+            )
+            continue
+        if (
+            shelf["desired"] == "finished"
+            and saved_audio_length(before.get("manual_total_seconds"))
+            != plan["readwise_length_seconds"]
+        ):
+            shelf.update(
+                status="needs_review",
+                reason="The audiobook length changed after planning. Review it before marking Finished.",
+            )
+            continue
         if before.get("status") == shelf["desired"]:
             shelf["status"] = "unchanged"
             continue
