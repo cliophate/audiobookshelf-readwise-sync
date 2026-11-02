@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 import httpx
 
-from . import exporter, optional
+from . import exporter, optional, shelves
 from .clients import ABSClient, AppClient, BooksClient
 from .config import SyncError
 from .matching import item_metadata, same_work
@@ -16,6 +16,8 @@ from .audio_sources import fit_audio_endpoint, save_issue, resolve_issue, source
 
 
 def positive_length(value):
+    if isinstance(value, bool):
+        return None
     try:
         number = float(value)
         return round(number) if math.isfinite(number) and 0 < number <= 360000 else None
@@ -35,6 +37,8 @@ def resolve_book(con, item_id, metadata, books, mappings):
     matches = [b for b in books if b.get("status") != "deleted" and same_work(metadata, b)]
     if len(matches) == 1:
         return matches[0], "matched"
+    if not matches and any(b.get("status") == "deleted" and same_work(metadata, b) for b in books):
+        return None, "book_unavailable"
     return None, "ambiguous" if matches else "unmatched"
 
 
@@ -86,24 +90,30 @@ def build_plan(con, settings, bundle, books, sessions, now=None):
     for source in bundle["sessions"]:
         if source.get("mediaType", "book") == "book":
             by_item.setdefault(str(source["libraryItemId"]), []).append(source)
+    if settings.sync_shelves:
+        for item_id in set(bundle["items"]) | set(bundle.get("missing_items", [])):
+            by_item.setdefault(item_id, [])
     plans = []
     occupied = list(sessions)
     for item_id, sources in sorted(by_item.items()):
         detail = bundle["items"].get(item_id)
+        first_source = sources[0] if sources else {}
         metadata = (
             item_metadata(detail)
             if detail
             else {
-                "title": sources[0].get("displayTitle")
-                or (sources[0].get("mediaMetadata") or {}).get("title")
+                "title": first_source.get("displayTitle")
+                or (first_source.get("mediaMetadata") or {}).get("title")
                 or "Unavailable ABS item",
-                "author": sources[0].get("displayAuthor")
-                or (sources[0].get("mediaMetadata") or {}).get("author")
+                "author": first_source.get("displayAuthor")
+                or (first_source.get("mediaMetadata") or {}).get("author")
                 or "",
-                "duration": sources[0].get("duration"),
+                "duration": first_source.get("duration"),
             }
         )
         book, state = resolve_book(con, item_id, metadata, books, mappings)
+        if state == "unmatched" and item_id in bundle.get("ambiguous_catalog", []):
+            state = "ambiguous"
         length = positive_length((book or {}).get("manual_total_seconds"))
         source_length = positive_length(metadata["duration"])
         if book and not length:
@@ -125,6 +135,8 @@ def build_plan(con, settings, bundle, books, sessions, now=None):
         plan = {
             "abs_item_id": item_id,
             "title": metadata["title"],
+            "subtitle": metadata.get("subtitle"),
+            "series": metadata.get("series", []),
             "author": metadata["author"],
             "readwise_book_id": str(book["id"]) if book else None,
             "status": state,
@@ -132,8 +144,30 @@ def build_plan(con, settings, bundle, books, sessions, now=None):
             "readwise_length_seconds": length,
             "sessions": [],
         }
+        if state == "needs_length":
+            if item_id in bundle.get("setup_notes", {}):
+                reason = bundle["setup_notes"][item_id]
+            elif not source_length:
+                reason = (
+                    "Readwise has no saved manual audiobook length, and ABS has no usable duration. "
+                    "Set the correct length in Readwise Books before importing sessions."
+                )
+            elif settings.app_session:
+                reason = (
+                    "Readwise manual_total_seconds is null or invalid. Optional setup can save "
+                    "the ABS duration with --apply before importing."
+                )
+            else:
+                reason = (
+                    "Readwise manual_total_seconds is null or invalid. Set the audiobook length "
+                    "in the app's manual tracking form and cancel any temporary timer. "
+                    "Or configure --login for optional automatic setup."
+                )
+            plan["length_help"] = reason
         for source in sorted(sources, key=lambda s: float(s.get("startedAt") or 0)):
             row = {"source_id": source["id"], "status": state}
+            if state == "needs_length":
+                row["reason"] = plan["length_help"]
             if state == "missing_abs_item":
                 row["reason"] = next(
                     (
@@ -208,6 +242,8 @@ def build_plan(con, settings, bundle, books, sessions, now=None):
                 row["reason"] = "Source timing, identity, or previous submission needs review."
             plan["sessions"].append(row)
         plans.append(plan)
+    if settings.sync_shelves:
+        shelves.annotate(con, plans, bundle, books)
     return plans
 
 
@@ -231,6 +267,8 @@ def report(plans, mode, result=None, bundle=None):
     summary.update(i["status"] for sid, i in unique_issues.items() if sid not in planned_ids)
     if bundle.get("excluded_by_cutoff"):
         summary["before_import_since"] += bundle["excluded_by_cutoff"]
+    if bundle.get("excluded_by_scope"):
+        summary["outside_item_scope"] += bundle["excluded_by_scope"]
     public = [
         {
             **p,
@@ -248,6 +286,8 @@ def report(plans, mode, result=None, bundle=None):
         "result": result or {},
         "source_issues": issues,
         "excluded_by_cutoff": bundle.get("excluded_by_cutoff", 0),
+        "excluded_by_scope": bundle.get("excluded_by_scope", 0),
+        "shelf_summary": dict(Counter(p["shelf"]["status"] for p in plans if "shelf" in p)),
     }
 
 
@@ -258,7 +298,13 @@ async def run_once(settings, *, apply=False, transport=None, delay=3.1, accept_t
             api = BooksClient(http, settings.readwise_token, delay)
             app = AppClient(http, settings.app_session, delay) if settings.app_session else None
             # Do not export anything until a complete fresh ABS fetch succeeds.
-            bundle = await abs_client.fetch(settings.import_since)
+            managed = [row[0] for row in con.execute("select work from books")]
+            bundle = await abs_client.fetch(
+                settings.import_since,
+                item_ids=settings.abs_item_ids,
+                managed_ids=managed,
+                sync_shelves=settings.sync_shelves,
+            )
             books = await api.list("/books")
             sessions = await api.list("/sessions", include_deleted="true")
             bind_identity(con, settings, bundle["user_id"], accept_token_change=accept_token_change)
@@ -271,20 +317,26 @@ async def run_once(settings, *, apply=False, transport=None, delay=3.1, accept_t
                 return report(plans, "preview", bundle=bundle)
             if app:
                 for plan in plans:
-                    if not any(
+                    session_setup = any(
                         s["status"] in ("unmatched", "needs_length") for s in plan["sessions"]
-                    ):
+                    )
+                    shelf_setup = plan.get("shelf", {}).get("status") == "needs_book"
+                    if not session_setup and not shelf_setup:
                         continue
                     metadata = item_metadata(bundle["items"][plan["abs_item_id"]])
                     book, state = resolve_book(
                         con, plan["abs_item_id"], metadata, books, settings.mappings()
                     )
                     if state == "unmatched":
-                        book = await optional.add_book(con, api, app, plan["abs_item_id"], metadata)
+                        book, catalog_state = await optional.add_book(
+                            con, api, app, plan["abs_item_id"], metadata
+                        )
+                        if catalog_state == "ambiguous":
+                            bundle.setdefault("ambiguous_catalog", []).append(plan["abs_item_id"])
                         if book:
                             books.append(book)
-                    if book and positive_length(metadata["duration"]):
-                        await optional.ensure_length(
+                    if book and session_setup and positive_length(metadata["duration"]):
+                        length_result = await optional.ensure_length(
                             con,
                             api,
                             app,
@@ -292,6 +344,11 @@ async def run_once(settings, *, apply=False, transport=None, delay=3.1, accept_t
                             positive_length(metadata["duration"]),
                             settings.timezone,
                         )
+                        if length_result == "session_active":
+                            bundle.setdefault("setup_notes", {})[plan["abs_item_id"]] = (
+                                "An active manual session prevented audiobook length setup. "
+                                "Finish or cancel it in Readwise Books, then retry."
+                            )
                 plans = build_plan(con, settings, bundle, books, sessions)
                 retain_plan_issues(con, plans, bundle)
             pending = []
@@ -314,4 +371,6 @@ async def run_once(settings, *, apply=False, transport=None, delay=3.1, accept_t
                 counts.update(r["status"] for r in results)
                 if any(r["status"] != "confirmed" for r in results):
                     break
+            if settings.sync_shelves:
+                await shelves.apply(con, api, plans)
             return report(plans, "apply", dict(counts), bundle)

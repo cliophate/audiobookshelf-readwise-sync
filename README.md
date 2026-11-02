@@ -8,7 +8,7 @@ The default setup uses your regular Readwise API token. An extra app session cre
 
 This is an early standalone release extracted from a personal reading stats app. The original integration runs daily; this extracted version has automated HTTP tests and a Docker build check. It has not yet had a separate live-account trial. Start with the preview and check a small import before enabling the background worker.
 
-Version 0.1.2 adds a device-approval login for optional automatic book setup. It saves the app credential locally after you approve the login on your phone. The earlier missing-item and import-cutoff fixes are included.
+Version 0.1.3 adds optional ABS-driven shelves, an item allowlist for large libraries, primary-title matching, and clearer missing-duration guidance. Device-approval login and the earlier missing-item fixes are included.
 
 See the [changelog](CHANGELOG.md) for version history and update instructions.
 
@@ -60,6 +60,10 @@ Use an ABS address reachable from the sync container. `localhost` points to the 
 Add the books you want to sync to your Readwise Books library. For each one, set the correct audiobook length in the app's manual audiobook tracking form. If saving the length starts a timer, cancel that temporary session afterward.
 
 This step matters. The sync waits for a saved audiobook length before importing sessions. Setting a length afterward does not repair percentages on sessions already imported.
+
+`manual_total_seconds: null` means Readwise has no saved manual audiobook length for that record. Having the book in both libraries does not set it. The preview now explains how to save the length manually or enable optional automatic setup, and reports when an active manual timer prevents setup.
+
+For a large ABS library, start with a few books. Set `ABS_ITEM_IDS` in `.env` to their ABS item IDs, separated by commas, or use `IMPORT_SINCE` to limit listening history by date. See [Choose which books to sync](#choose-which-books-to-sync).
 
 It automatically matches a book when exactly one library entry has the same title and author. Capitalization, punctuation and common edition labels are ignored. Different subtitles stay distinct. Use a manual mapping when titles or author credits differ.
 
@@ -132,13 +136,13 @@ Stop the worker with `docker compose stop sync`. Nothing is deleted from either 
 
 ### NAS and prebuilt images
 
-The [v0.1.2 release](https://github.com/cliophate/audiobookshelf-readwise-sync/releases/tag/v0.1.2) provides tagged Docker image archives for `linux-amd64` and `linux-arm64`. Choose the one matching your NAS. Import it in Container Manager, or load it with Docker:
+The [v0.1.3 release](https://github.com/cliophate/audiobookshelf-readwise-sync/releases/tag/v0.1.3) provides tagged Docker image archives for `linux-amd64` and `linux-arm64`. Choose the one matching your NAS. Import it in Container Manager, or load it with Docker:
 
 ```sh
-docker load --input audiobookshelf-readwise-sync-v0.1.2-linux-amd64.tar.gz
+docker load --input audiobookshelf-readwise-sync-v0.1.3-linux-amd64.tar.gz
 ```
 
-The image is named `audiobookshelf-readwise-sync:0.1.2`. Use the normal configuration above, with the image override:
+The image is named `audiobookshelf-readwise-sync:0.1.3`. Use the normal configuration above, with the image override:
 
 ```sh
 docker compose -f compose.yaml -f compose.image.yaml run --rm sync --json
@@ -163,6 +167,48 @@ An item-specific 404 can be skipped. A 404, authentication failure, network fail
 `IMPORT_SINCE` now excludes old sessions before item metadata requests, matching and per-book output. The full paginated ABS session list is still read, since the endpoint does not offer the cutoff used by this tool. Older cached sources and review records remain available locally.
 
 For end-position rounding, the sync clips at most one second only when ABS's book length and Readwise's saved length also agree within one second. It keeps the unmodified ABS observation in the checkpoint, so later polls do not repeat that session. Larger mismatches remain `position_exceeds_length`, with the ABS position and both lengths in the preview. It never stretches a 98% session to 100% or marks a book finished on that basis.
+
+## Choose which books to sync
+
+By default, the sync considers books with eligible listening sessions. It does not enumerate your whole ABS library. For a small import, set an explicit allowlist in `.env`:
+
+```dotenv
+ABS_ITEM_IDS=library-item-id-1,library-item-id-2
+```
+
+The IDs are the ABS item IDs shown in the preview or your ABS book URLs. The allowlist filters sessions before item lookups, matching, automatic book setup and shelf updates. Sessions outside it contribute one summary count instead of a long list of unmatched books. It does not remove books or sessions already imported, or erase local review records.
+
+`IMPORT_SINCE` separately limits the original start date of sessions to import. Clearing either limit makes older or additional history eligible again, using the existing ledger to avoid repeating successful imports.
+
+## Optional shelf sync
+
+Shelf syncing is off by default. To let ABS manage the Readwise shelf of selected books, add this to `.env`:
+
+```dotenv
+SYNC_SHELVES=true
+```
+
+| ABS state | Readwise shelf |
+| --- | --- |
+| No progress, or zero progress with `isFinished: false` | Want to Read |
+| Progress with `isFinished: false` | Currently Reading |
+| `isFinished: true` | Finished |
+
+Completion comes from ABS's explicit flag. Reaching 98%, 99% or even 100% without that flag does not mark a book finished.
+
+Run the usual preview first. It shows the current shelf, proposed shelf and any review reason. Shelf changes require `--apply`. They use the [documented Books API](https://readwise.io/books_api#update-books) and need only your regular Readwise API token for books already in your Readwise library. Adding a missing book automatically still needs the optional app login.
+
+With no allowlist, shelf sync covers books with eligible listening history plus books already bound in the local sync ledger. This lets an imported book's shelf update after you tighten `IMPORT_SINCE`. To include a book you have never started, explicitly include its ID in `ABS_ITEM_IDS`. The sync never imports every untouched book from your library automatically.
+
+When enabled, ABS controls these shelves. Resetting progress in ABS can move a selected Readwise book back to Want to Read. Ratings, reviews and existing reading dates are preserved; the sync does not invent completion dates. Deleted Readwise books are left for review. Conflicting mappings or invalid progress block the affected shelf change.
+
+Shelf writes are journaled before sending and verified by reading the book back. An uncertain update stays blocked for review and appears in `--issues`; it is not replayed on restart. The `shelf_attempts` table retains the original book snapshot and desired shelf. Back up `data/` before any manual ledger repair, and check the corresponding Readwise record first. Keep the database when upgrading, disabling the feature, or restoring code.
+
+## Book matching
+
+Matching uses the ABS primary title and author. A separate subtitle is retained in the preview instead of being appended to the title. Readwise titles with an added subtitle can match that primary title. Series details are retained as supporting metadata; conflicting known book or part numbers block a match.
+
+The sync does not collapse two different colon titles to their shared prefix, choose between multiple matching editions, or guess from a title alone. Multiple matches stay `ambiguous` for explicit mapping. Catalog ambiguities discovered during optional setup are also reported for review. Existing ledger bindings and explicit mappings take precedence, so a matching change cannot move previously imported history to another book.
 
 ## Optional automatic book setup
 

@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.1.3 - 2026-11-02
+
+### Added
+
+- Optional `SYNC_SHELVES=true` maps ABS progress to Want to Read, Currently Reading and Finished. It previews changes, requires `--apply`, preserves ratings, reviews and dates, and uses ABS's completion flag rather than rounding a percentage to finished.
+- `ABS_ITEM_IDS` limits metadata requests, matching, imports and shelf changes to an explicit list of books. Untouched books require explicit selection and shelf sync; the tool does not enumerate or import the whole ABS library.
+- A durable shelf-write journal and read-back verification. Failed or uncertain writes stay available through `--issues` and are not replayed. Keep the existing data directory on upgrade.
+- Missing-duration guidance explains `manual_total_seconds: null`, manual setup, optional automatic setup and active manual sessions that prevent setup.
+
+### Fixed
+
+- ABS subtitles remain separate from the primary title during matching. Title and author drive matching, supporting metadata retains series information, and conflicting book or part numbers still prevent a match.
+- Multiple matching library books or catalog editions are held for review. Existing mappings and imported book identities remain fixed. Deleted Readwise books are not restored automatically.
+
 ## 0.1.2 - 2026-11-01
 
 ### Added

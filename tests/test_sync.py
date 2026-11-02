@@ -593,7 +593,8 @@ class MatchingTests(unittest.TestCase):
                 }
             }
         )
-        self.assertEqual(metadata["title"], "A Book: Part Two")
+        self.assertEqual(metadata["title"], "A Book")
+        self.assertEqual(metadata["subtitle"], "Part Two")
         self.assertFalse(
             same_work(metadata, {"title": "A Book: Part One", "author": "Ada Example"})
         )

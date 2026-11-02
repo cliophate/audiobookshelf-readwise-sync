@@ -45,6 +45,23 @@ def minutes(name, default):
         raise SyncError(f"{name} must be a positive whole number.") from None
 
 
+def boolean(name, default=False):
+    value = os.getenv(name, str(default)).strip().lower()
+    if value not in ("true", "false"):
+        raise SyncError(f"{name} must be true or false.")
+    return value == "true"
+
+
+def item_ids():
+    value = os.getenv("ABS_ITEM_IDS", "").strip()
+    if not value:
+        return ()
+    ids = tuple(dict.fromkeys(x.strip() for x in value.split(",")))
+    if any(not x or any(c.isspace() for c in x) or "/" in x for x in ids):
+        raise SyncError("ABS_ITEM_IDS must be comma-separated Audiobookshelf item IDs.")
+    return ids
+
+
 @dataclass(frozen=True)
 class Settings:
     abs_url: str
@@ -57,6 +74,8 @@ class Settings:
     settle_minutes: int
     timezone: str
     import_since: datetime | None
+    sync_shelves: bool = False
+    abs_item_ids: tuple[str, ...] = ()
 
     @classmethod
     def load(cls):
@@ -101,6 +120,8 @@ class Settings:
             minutes("SETTLE_MINUTES", 45),
             timezone,
             dates[0],
+            boolean("SYNC_SHELVES"),
+            item_ids(),
         )
 
     def mappings(self):

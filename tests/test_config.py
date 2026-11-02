@@ -24,6 +24,23 @@ class ConfigTests(unittest.TestCase):
 
     def test_no_app_session_is_required(self):
         self.assertEqual(Settings.load().app_session, "")
+        self.assertFalse(Settings.load().sync_shelves)
+        self.assertEqual(Settings.load().abs_item_ids, ())
+
+    def test_shelf_sync_and_item_selection_require_valid_explicit_settings(self):
+        with patch.dict(os.environ, {"SYNC_SHELVES": "true", "ABS_ITEM_IDS": "a, b,a"}):
+            settings = Settings.load()
+            self.assertTrue(settings.sync_shelves)
+            self.assertEqual(settings.abs_item_ids, ("a", "b"))
+        for change in (
+            {"SYNC_SHELVES": "maybe"},
+            {"ABS_ITEM_IDS": "a,,b"},
+            {"ABS_ITEM_IDS": "a/b"},
+            {"ABS_ITEM_IDS": "an item"},
+        ):
+            with self.subTest(change=change), patch.dict(os.environ, change):
+                with self.assertRaises(SyncError):
+                    Settings.load()
 
     def test_secret_file_and_json_session_are_supported(self):
         with tempfile.TemporaryDirectory() as directory:

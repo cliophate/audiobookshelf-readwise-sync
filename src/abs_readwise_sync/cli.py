@@ -41,7 +41,22 @@ async def run(args):
                 "select source_id,item_id,status,reason,first_seen_at,last_seen_at "
                 "from source_issues where resolved_at is null order by last_seen_at desc"
             ).fetchall()
-        print(json.dumps([dict(zip(keys, row)) for row in rows], indent=2))
+            shelf_rows = con.execute(
+                "select item_id,book_id,desired from shelf_attempts where status!='confirmed'"
+            ).fetchall()
+        issues = [dict(zip(keys, row)) for row in rows]
+        issues.extend(
+            {
+                "type": "shelf",
+                "abs_item_id": item_id,
+                "readwise_book_id": book_id,
+                "desired_shelf": desired,
+                "status": "needs_review",
+                "reason": "A previous shelf write needs review. It will not be replayed.",
+            }
+            for item_id, book_id, desired in shelf_rows
+        )
+        print(json.dumps(issues, indent=2))
         return 0
     if args.list_books:
         async with httpx.AsyncClient(timeout=60, trust_env=False) as http:
@@ -49,7 +64,10 @@ async def run(args):
         print(
             json.dumps(
                 [
-                    {key: b.get(key) for key in ("id", "title", "author", "manual_total_seconds")}
+                    {
+                        key: b.get(key)
+                        for key in ("id", "title", "author", "status", "manual_total_seconds")
+                    }
                     for b in books
                     if b.get("status") != "deleted"
                 ],
@@ -87,6 +105,16 @@ async def run(args):
                         f"Readwise {book['readwise_book_id'] or 'unmatched'} | {counts}",
                         flush=True,
                     )
+                    if book.get("length_help"):
+                        print("    Length: " + book["length_help"], flush=True)
+                    if book.get("shelf"):
+                        shelf = book["shelf"]
+                        print(
+                            f"    Shelf: {shelf['current']} -> {shelf['desired']} "
+                            f"({shelf['status']})"
+                            + (" " + shelf["reason"] if shelf.get("reason") else ""),
+                            flush=True,
+                        )
                 if result["result"]:
                     print("  Imported: " + json.dumps(result["result"], sort_keys=True), flush=True)
                 diagnostics = [
@@ -157,7 +185,7 @@ def main():
     parser.add_argument(
         "--issues",
         action="store_true",
-        help="list retained unresolved source issues without HTTP requests",
+        help="list retained unresolved source and shelf issues without HTTP requests",
     )
     parser.add_argument(
         "--list-books", action="store_true", help="list Readwise library book IDs without importing"

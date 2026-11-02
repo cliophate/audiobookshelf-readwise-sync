@@ -178,7 +178,7 @@ class ABSClient:
         except ValueError:
             raise SyncError("Audiobookshelf returned an invalid response.") from None
 
-    async def fetch(self, import_since=None):
+    async def fetch(self, import_since=None, *, item_ids=(), managed_ids=(), sync_shelves=False):
         me = await self.get("/api/me")
         if not isinstance(me, dict) or not me.get("id"):
             raise SyncError("Audiobookshelf did not identify the current user.")
@@ -208,8 +208,15 @@ class ABSClient:
             for s in all_sessions
             if isinstance(s, dict) and isinstance(s.get("id"), str)
         )
-        sessions, issues, excluded = [], [], 0
+        sessions, issues, excluded, outside_scope = [], [], 0, 0
         for source in all_sessions:
+            if (
+                item_ids
+                and isinstance(source, dict)
+                and source.get("libraryItemId") not in item_ids
+            ):
+                outside_scope += 1
+                continue
             if isinstance(source, dict) and source.get("mediaType", "book") != "book":
                 continue
             reason = validate_source(source)
@@ -222,9 +229,10 @@ class ABSClient:
             else:
                 sessions.append(source)
         items, missing = {}, []
-        for item_id in sorted(
-            {str(s["libraryItemId"]) for s in sessions if s.get("mediaType", "book") == "book"}
-        ):
+        selected = {str(s["libraryItemId"]) for s in sessions}
+        if sync_shelves:
+            selected.update(item_ids or managed_ids)
+        for item_id in sorted(selected):
             path = "/api/items/" + quote(item_id, safe="")
             detail = await self.get(path, allow_missing=True, expanded=1)
             if detail is None:
@@ -239,7 +247,16 @@ class ABSClient:
                 continue
             if not isinstance(detail, dict) or str(detail.get("id")) != item_id:
                 raise SyncError("Audiobookshelf returned the wrong library item.")
+            if detail.get("mediaType", "book") != "book":
+                missing.append(item_id)
+                continue
             items[item_id] = detail
+        progress = {}
+        if sync_shelves:
+            for item_id in sorted(items):
+                progress[item_id] = await self.get(
+                    "/api/me/progress/" + quote(item_id, safe=""), allow_missing=True
+                )
         return {
             "user_id": str(me["id"]),
             "sessions": sessions,
@@ -248,4 +265,6 @@ class ABSClient:
             "issues": issues,
             "missing_items": missing,
             "excluded_by_cutoff": excluded,
+            "excluded_by_scope": outside_scope,
+            "progress": progress,
         }

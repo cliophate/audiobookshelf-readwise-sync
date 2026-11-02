@@ -33,6 +33,11 @@ def database(settings):
                 create table if not exists setup_attempts(item_id text primary key,status text not null);
                 create table if not exists length_attempts(
                     book_id text primary key,length integer,status text,session_id text,previous_json text);
+                create table if not exists shelf_attempts(
+                    id integer primary key,item_id text not null,book_id text not null,
+                    previous_json text not null,desired text not null,status text not null);
+                create index if not exists shelf_attempts_item_status
+                    on shelf_attempts(item_id,status);
             """)
             yield con
         finally:

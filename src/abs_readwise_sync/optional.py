@@ -14,7 +14,7 @@ async def add_book(con, api, app, item_id, source):
         raise SyncError("Readwise catalog search returned an invalid response.")
     matches = [p for p in products if isinstance(p, dict) and same_work(source, p)]
     if len(matches) != 1:
-        return None
+        return None, "ambiguous" if matches else "unmatched"
     pid = str(matches[0]["id"])
     with con:
         con.execute("insert into setup_attempts values(?,?)", (item_id, "pending"))
@@ -40,7 +40,7 @@ async def add_book(con, api, app, item_id, source):
         raise SyncError("Added book could not be verified. Review the setup attempt.")
     with con:
         con.execute("update setup_attempts set status='confirmed' where item_id=?", (item_id,))
-    return books[0]
+    return books[0], "matched"
 
 
 async def ensure_length(con, api, app, book, length, timezone):
