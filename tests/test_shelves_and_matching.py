@@ -98,8 +98,10 @@ class ShelfFixture(SyncFixture):
             data["media"]["metadata"].update(self.metadata.get(data["id"], {}))
             return httpx.Response(200, json=data)
         if request.method == "PATCH" and path == "/books/api/v1/books":
-            self.server.requests.append(request)
             item = json.loads(request.content)["items"][0]
+            if "manual_total_seconds" in item:
+                return self.server.respond(request)
+            self.server.requests.append(request)
             if self.shelf_failure == "before":
                 raise httpx.ReadTimeout("private-detail", request=request)
             book = next(b for b in self.server.books if b["id"] == item["id"])
@@ -114,7 +116,11 @@ class ShelfFixture(SyncFixture):
         self.settings = dataclasses.replace(self.settings, sync_shelves=True, **settings)
 
     def shelf_writes(self):
-        return [r for r in self.server.writes if r.method == "PATCH"]
+        return [
+            r
+            for r in self.server.writes
+            if r.method == "PATCH" and "status" in json.loads(r.content)["items"][0]
+        ]
 
 
 class ShelfTests(ShelfFixture, unittest.IsolatedAsyncioTestCase):
@@ -364,8 +370,8 @@ class ShelfTests(ShelfFixture, unittest.IsolatedAsyncioTestCase):
         result = await self.run_sync()
         help_text = result["books"][0]["length_help"]
         self.assertIn("manual_total_seconds", help_text)
-        self.assertIn("manual tracking form", help_text)
-        self.assertIn("--login", help_text)
+        self.assertIn("public API", help_text)
+        self.assertIn("--apply", help_text)
         self.assertEqual(self.server.writes, [])
 
     async def test_active_manual_session_explains_why_automatic_duration_setup_waits(self):
@@ -373,12 +379,14 @@ class ShelfTests(ShelfFixture, unittest.IsolatedAsyncioTestCase):
         self.server.books[0]["manual_total_seconds"] = None
         self.server.active = {"id": 99}
         result = await self.run_sync(apply=True)
-        self.assertIn("active manual session", result["books"][0]["length_help"])
-        self.assertEqual(self.server.writes, [])
+        self.assertIn("active reading session", result["books"][0]["length_help"])
+        self.assertEqual(self.server.sessions, [])
+        self.assertEqual(self.server.active, {"id": 99})
 
     async def test_finished_and_imports_wait_for_a_saved_manual_audio_length(self):
         self.enable()
         self.server.books[0]["manual_total_seconds"] = None
+        self.server.item_duration = None
         result = await self.run_sync(apply=True)
         self.assertEqual(result["summary"], {"needs_length": 1})
         self.assertEqual(result["shelf_summary"], {"needs_length": 1})

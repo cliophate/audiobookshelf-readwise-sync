@@ -1,3 +1,4 @@
+import json
 import unittest
 
 import httpx
@@ -27,8 +28,9 @@ class FinishSafetyTests(ShelfFixture, unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.server.writes, [])
         self.assertIn("Suspect audio range", result["books"][0]["sessions"][0]["reason"])
 
-    async def test_invalid_lengths_block_finished_and_session_posts(self):
+    async def test_invalid_lengths_without_abs_duration_block_finished_and_session_posts(self):
         self.enable()
+        self.server.item_duration = None
         for value in (None, 0, -1, True, "1000", 1000.5):
             with self.subTest(value=value):
                 self.server.books[0]["manual_total_seconds"] = value
@@ -40,20 +42,22 @@ class FinishSafetyTests(ShelfFixture, unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(self.server.books[0]["status"], "currently_reading")
 
     async def test_invalid_existing_length_is_repaired_verified_then_imported_and_finished(self):
-        self.enable(app_session="test-app-session")
+        self.enable()
         self.server.books[0]["manual_total_seconds"] = 0
         result = await self.run_sync(apply=True)
         self.assertEqual(self.server.books[0]["manual_total_seconds"], 1000)
         self.assertEqual(result["result"], {"confirmed": 1})
         self.assertEqual(result["shelf_summary"], {"confirmed": 1})
         requests = self.server.requests
-        cancel = next(
-            i for i, r in enumerate(requests) if r.url.path.endswith("/manual_sessions/cancel")
+        saved = next(
+            i
+            for i, r in enumerate(requests)
+            if r.method == "PATCH" and "manual_total_seconds" in json.loads(r.content)["items"][0]
         )
         checked = next(
             i
             for i, r in enumerate(requests)
-            if i > cancel
+            if i > saved
             and r.method == "GET"
             and r.url.path.endswith("/books")
             and r.url.params.get("ids")
@@ -63,17 +67,18 @@ class FinishSafetyTests(ShelfFixture, unittest.IsolatedAsyncioTestCase):
             for i, r in enumerate(requests)
             if r.method == "POST" and r.url.path == "/books/api/v1/sessions"
         )
-        finished = next(i for i, r in enumerate(requests) if r.method == "PATCH")
-        self.assertLess(cancel, checked)
+        finished = requests.index(self.shelf_writes()[0])
+        self.assertLess(saved, checked)
         self.assertLess(checked, imported)
         self.assertLess(imported, finished)
 
     async def test_finished_book_without_new_sessions_still_gets_duration_setup(self):
-        self.enable(abs_item_ids=("item-1",), app_session="test-app-session")
+        self.enable(abs_item_ids=("item-1",))
         self.server.sources = []
         self.server.books[0]["manual_total_seconds"] = None
         result = await self.run_sync(apply=True)
-        self.assertEqual(self.server.app_start_count, 1)
+        self.assertEqual(self.server.length_update_count, 1)
+        self.assertEqual(self.server.app_start_count, 0)
         self.assertEqual(self.server.books[0]["manual_total_seconds"], 1000)
         self.assertEqual(result["shelf_summary"], {"confirmed": 1})
         self.assertEqual(self.server.sessions, [])
@@ -85,8 +90,10 @@ class FinishSafetyTests(ShelfFixture, unittest.IsolatedAsyncioTestCase):
         self.server.active = {"id": 99}
         result = await self.run_sync(apply=True)
         self.assertEqual(result["shelf_summary"], {"needs_length": 1})
-        self.assertIn("active manual session", result["books"][0]["length_help"])
-        self.assertEqual(self.server.writes, [])
+        self.assertIn("active reading session", result["books"][0]["length_help"])
+        self.assertEqual(self.server.active, {"id": 99})
+        self.assertEqual(self.server.sessions, [])
+        self.assertEqual(self.shelf_writes(), [])
 
     async def test_failed_duration_readback_blocks_both_operations_and_retains_review(self):
         self.enable(app_session="test-app-session")
@@ -99,7 +106,7 @@ class FinishSafetyTests(ShelfFixture, unittest.IsolatedAsyncioTestCase):
                 request.method == "GET"
                 and request.url.path == "/books/api/v1/books"
                 and request.url.params.get("ids")
-                and self.server.app_start_count
+                and self.server.length_update_count
             ):
                 data = response.json()
                 data["results"][0]["manual_total_seconds"] = None
@@ -115,7 +122,7 @@ class FinishSafetyTests(ShelfFixture, unittest.IsolatedAsyncioTestCase):
         again = await self.run_sync(apply=True)
         self.assertEqual(again["books"][0]["status"], "setup_needs_review")
         self.assertEqual(again["shelf_summary"], {"needs_review": 1})
-        self.assertEqual(self.server.app_start_count, 1)
+        self.assertEqual(self.server.length_update_count, 1)
 
     async def test_duration_changed_after_planning_blocks_finished(self):
         self.enable()
@@ -145,6 +152,7 @@ class FinishSafetyTests(ShelfFixture, unittest.IsolatedAsyncioTestCase):
 
     async def test_currently_reading_still_does_not_need_a_saved_duration(self):
         self.enable()
+        self.server.item_duration = None
         self.progress["item-1"]["isFinished"] = False
         self.server.books[0].update(status="want_to_read", manual_total_seconds=None)
         result = await self.run_sync(apply=True)

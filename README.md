@@ -4,11 +4,11 @@ Import your Audiobookshelf listening sessions into Readwise Books, formerly Book
 
 Run it alongside Audiobookshelf in Docker. Your credentials and listening history stay on your server, with requests going to your Audiobookshelf server and Readwise. No audio files are uploaded.
 
-The default setup uses your regular Readwise API token. An extra app session credential is optional and enables automatic book setup.
+The default setup uses your regular Readwise API token, including saving audiobook lengths automatically. An extra app session credential is optional and enables catalog search and adding unmatched books.
 
 This is an early standalone release extracted from a personal reading stats app. The original integration runs daily; this extracted version has automated HTTP tests and a Docker build check. It has not yet had a separate live-account trial. Start with the preview and check a small import before enabling the background worker.
 
-Version 0.1.5 holds implausible audio ranges for review and adds a local review of existing imports. It preserves the original positions and history. Finished also waits when source timing needs review.
+Version 0.1.6 saves audiobook lengths through the public API. No app login or temporary listening session is needed for length setup. Audio range checks, read-only import review and the Finished checks remain in place.
 
 See the [changelog](CHANGELOG.md) for version history and update instructions.
 
@@ -57,11 +57,11 @@ Use an ABS address reachable from the sync container. `localhost` points to the 
 
 ### 2. Prepare the books in Readwise Books
 
-Add the books you want to sync to your Readwise Books library. For each one, set the correct audiobook length in the app's manual audiobook tracking form. If saving the length starts a timer, cancel that temporary session afterward.
+Add the books you want to sync to your Readwise Books library. The preview shows any missing audiobook lengths. With `--apply`, the sync saves the ABS duration through the public API before importing. Your regular API token is enough. If you already set a valid length yourself, the sync leaves it alone.
 
-This step matters. The sync waits for a saved audiobook length before importing sessions. Setting a length afterward does not repair percentages on sessions already imported.
+The sync reads the book back to verify the saved length before importing sessions. Setting a length afterward does not repair percentages on sessions already imported.
 
-`manual_total_seconds: null` means Readwise has no saved manual audiobook length for that record. Having the book in both libraries does not set it. The preview now explains how to save the length manually or enable optional automatic setup, and reports when an active manual timer prevents setup.
+`manual_total_seconds: null` means Readwise has no saved audiobook length for that record. Having the book in both libraries does not set it. If Readwise rejects a length update, finish or cancel any active reading session for that book in the app, then retry. The sync never closes your session. If ABS has no usable duration, set the correct length yourself in Readwise Books.
 
 For a large ABS library, start with a few books. Set `ABS_ITEM_IDS` in `.env` to their ABS item IDs, separated by commas, or use `IMPORT_SINCE` to limit listening history by date. See [Choose which books to sync](#choose-which-books-to-sync).
 
@@ -83,7 +83,7 @@ Common statuses:
 | `ready` | Check the match. These sessions can be imported. |
 | `unmatched` | Add the book to Readwise Books or supply a manual mapping. |
 | `ambiguous` | More than one library book matches. Supply a mapping. |
-| `needs_length` | Set the audiobook length in Readwise Books. |
+| `needs_length` | Use `--apply` to save the ABS duration, or set a valid length in Readwise Books. |
 | `recent` | Wait for the quiet period after listening. |
 | `existing` | This source session has already been imported. |
 | `remote_overlap` | An existing or planned audiobook session overlaps. Review before importing. |
@@ -93,7 +93,7 @@ Common statuses:
 | `mapping_changed` | A previously imported item now points to another book. Review its ledger. |
 | `book_unavailable` | A mapped book is missing or deleted in Readwise Books. |
 | `needs_review` | The source is inconsistent, or a previous submission remains unresolved. |
-| `setup_needs_review` | An optional app setup was interrupted. Check its local journal and the app. |
+| `setup_needs_review` | A book or duration setup was interrupted or could not be verified. Check its local journal and Readwise. |
 
 To map a book yourself, list your Readwise library IDs:
 
@@ -136,13 +136,13 @@ Stop the worker with `docker compose stop sync`. Nothing is deleted from either 
 
 ### NAS and prebuilt images
 
-The [v0.1.5 release](https://github.com/cliophate/audiobookshelf-readwise-sync/releases/tag/v0.1.5) provides tagged Docker image archives for `linux-amd64` and `linux-arm64`. Choose the one matching your NAS. Import it in Container Manager, or load it with Docker:
+The [v0.1.6 release](https://github.com/cliophate/audiobookshelf-readwise-sync/releases/tag/v0.1.6) provides tagged Docker image archives for `linux-amd64` and `linux-arm64`. Choose the one matching your NAS. Import it in Container Manager, or load it with Docker:
 
 ```sh
-docker load --input audiobookshelf-readwise-sync-v0.1.5-linux-amd64.tar.gz
+docker load --input audiobookshelf-readwise-sync-v0.1.6-linux-amd64.tar.gz
 ```
 
-The image is named `audiobookshelf-readwise-sync:0.1.5`. Use the normal configuration above, with the image override:
+The image is named `audiobookshelf-readwise-sync:0.1.6`. Use the normal configuration above, with the image override:
 
 ```sh
 docker compose -f compose.yaml -f compose.image.yaml run --rm sync --json
@@ -196,9 +196,9 @@ SYNC_SHELVES=true
 
 Completion comes from ABS's explicit flag. Reaching 98%, 99% or even 100% without that flag does not mark a book finished.
 
-Finished also requires a valid saved Readwise audiobook duration. A missing, zero, fractional, boolean, string or out-of-range value blocks both the Finished update and new session imports. With app automation enabled, the sync can save a missing or invalid duration from ABS, cancel its temporary setup timer and re-fetch the book to verify the saved value before proceeding. This also covers selected completed books with no new listening sessions.
+Finished also requires a valid saved Readwise audiobook duration. A missing, zero, fractional, boolean, string or out-of-range value blocks both the Finished update and new session imports. With `--apply`, the sync saves a missing or invalid duration from ABS through the public API and re-fetches the book to verify the saved value before proceeding. No optional app login is required. This also covers selected completed books with no new listening sessions.
 
-An active manual timer, failed setup, uncertain cancellation or failed verification keeps Finished blocked. A source position above the saved duration also blocks Finished for review. The sync checks the duration again immediately before a Finished shelf write and holds the change if it has changed since planning. Want to Read and Currently Reading do not require an audio duration. Existing Finished shelves are not automatically reversed or repaired by this update.
+A rejected update, uncertain write or failed verification keeps Finished blocked. Readwise rejects duration changes while a reading session for that book is active. Close that session yourself and retry. Unfinished attempts from the old temporary-session workaround also stay blocked for review. A source position above the saved duration also blocks Finished for review. The sync checks the duration again immediately before a Finished shelf write and holds the change if it has changed since planning. Want to Read and Currently Reading do not require an audio duration. Existing Finished shelves are not automatically reversed or repaired by this update.
 
 Run the usual preview first. It shows the current shelf, proposed shelf and any review reason. Shelf changes require `--apply`. They use the [documented Books API](https://readwise.io/books_api#update-books) and need only your regular Readwise API token for books already in your Readwise library. Adding a missing book automatically still needs the optional app login.
 
@@ -250,9 +250,9 @@ Include `-f compose.yaml -f compose.image.yaml` for a prebuilt NAS image. The co
 
 If you already have a valid app credential, you can still save the bare value or JSON containing `sessionid` in `data/readwise-session` yourself, with permissions 600. The login command uses `READWISE_APP_SESSION_FILE` when set, otherwise `DATA_DIR/readwise-session`. It never reads or displays an old credential.
 
-With the credential present, `--apply` can search the app catalog, add a book when there is one exact title-and-author match, and save a missing audiobook length. Catalog results with multiple matching editions remain for manual setup. The preview performs no app writes or automatic setup.
+With the credential present, `--apply` can search the app catalog and add a book when there is one exact title-and-author match. Catalog results with multiple matching editions remain for manual setup. The preview performs no app writes or automatic setup.
 
-Saving a length uses the app's manual-session workflow: start a temporary audiobook session, cancel it immediately, verify the saved length, and restore any affected shelf or dates. It leaves valid existing lengths alone and does not interrupt an active manual session. A failed or uncertain setup blocks that book for review, including when the length was saved but cancellation failed.
+Length setup uses the documented `PATCH /books` endpoint with `manual_total_seconds`, independently of the app credential. It sends only the book ID and duration, verifies the result, and never creates or cancels a listening session. If you used the app login only for duration setup, you can remove `READWISE_APP_SESSION` and `READWISE_APP_SESSION_FILE` from your configuration. Keep the data directory and any unfinished setup journals for review.
 
 The optional paths use `/bookwise/api/`, which is an internal app API and can change independently of the official API. Remove the setting to return to token-only operation. Credentials that expire need replacing. Never send a session credential to someone helping you set this up.
 
@@ -344,7 +344,7 @@ docker compose run --rm sync --accept-token-change
 
 Only use this when you know the account is unchanged. A different pair of accounts needs separate state. Moving the same ABS server to a new address also needs a deliberate identity migration; do not work around it by discarding the ledger.
 
-For `needs_review` or `setup_needs_review`, stop the worker and inspect the local ledger alongside the corresponding Readwise record. The `exports`, `checkpoints`, `setup_attempts` and `length_attempts` tables retain the submitted details. Do not clear an uncertain attempt just to make it retry. Cancel any leftover temporary session in the app and verify its shelf and dates before repairing a setup journal.
+For `needs_review` or `setup_needs_review`, stop the worker and inspect the local ledger alongside the corresponding Readwise record. The `exports`, `checkpoints`, `setup_attempts` and `length_attempts` tables retain the submitted details. Do not clear an uncertain attempt just to make it retry. For legacy attempts from before 0.1.6, cancel any leftover temporary session yourself and verify its shelf and dates before repairing a setup journal. New duration writes create no temporary sessions. A known `invalid_value` rejection can retry on a later `--apply`; uncertain writes remain blocked.
 
 ## Development
 

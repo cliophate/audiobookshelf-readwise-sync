@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.6 - 2026-11-03
+
+### Changed
+
+- Missing or invalid audiobook lengths are saved through the documented `PATCH /books` field `manual_total_seconds`, using the regular Readwise API token. The temporary-session start/cancel workaround has been removed. `--apply` still controls remote writes.
+- A fresh read checks the book before setting its length, and another verifies the saved length and preserved shelf, dates, rating, review and page count. Valid existing lengths are left alone. Verification failures block imports and Finished updates.
+- Readwise can reject a length update while a reading session is open for that book. An explicit `invalid_value` rejection stays blocked and can retry after the session is closed. An uncertain write or unfinished attempt from the old workaround stays in the journal for review and is never replayed automatically.
+- The optional app login is now used only for catalog search and adding unmatched books. It is no longer required for automatic length setup. Keep the existing data directory and journals when upgrading.
+
+### Tests
+
+- Added coverage for token-only duration setup, read-back verification, rejected and uncertain writes, preservation of manually chosen lengths, concurrent edits and legacy cancellation failures.
+
 ## 0.1.5 - 2026-11-03
 
 ### Fixed

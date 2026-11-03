@@ -1,9 +1,6 @@
 """Optional automation through the Readwise Books app API."""
 
-import json
-
 from .config import SyncError
-from .durations import saved_audio_length
 from .matching import same_work
 
 
@@ -42,77 +39,3 @@ async def add_book(con, api, app, item_id, source):
     with con:
         con.execute("update setup_attempts set status='confirmed' where item_id=?", (item_id,))
     return books[0], "matched"
-
-
-async def ensure_length(con, api, app, book, length, timezone):
-    """Save a missing length, cancel the temporary session, restore shelf/dates."""
-    if saved_audio_length(book.get("manual_total_seconds")):
-        return "existing"
-    con.execute("""create table if not exists length_attempts(
-        book_id text primary key,length integer,status text,session_id text,previous_json text)""")
-    con.commit()
-    bid = str(book["id"])
-    if con.execute("select 1 from length_attempts where book_id=?", (bid,)).fetchone():
-        return "needs_review"
-    if (await app.request("GET", "/manual_sessions/ongoing")).get("session"):
-        return "session_active"
-    with con:
-        con.execute(
-            "insert into length_attempts values(?,?,?,?,?)",
-            (bid, length, "pending", None, json.dumps(book)),
-        )
-    data = await app.request(
-        "POST",
-        "/manual_sessions/start",
-        json={
-            "tracked_book_id": int(bid),
-            "manual_format": "audiobook",
-            "seconds": 0,
-            "total_seconds": length,
-            "timezone": timezone,
-        },
-    )
-    session = data.get("session") or data
-    sid = session.get("id") or session.get("session_id")
-    if not sid:
-        raise SyncError("The temporary length session needs review. Its ID was not returned.")
-    with con:
-        con.execute(
-            "update length_attempts set status='cancel_pending',session_id=? where book_id=?",
-            (str(sid), bid),
-        )
-    await app.request("POST", "/manual_sessions/cancel", json={"session_id": sid})
-    if (await app.request("GET", "/manual_sessions/ongoing")).get("session"):
-        raise SyncError(
-            "A manual session is still active after length setup. Review it in the app."
-        )
-    fresh_books = await api.list("/books", ids=bid)
-    if len(fresh_books) != 1 or str(fresh_books[0]["id"]) != bid:
-        raise SyncError("Cannot verify the audiobook length.")
-    fresh = fresh_books[0]
-    if saved_audio_length(fresh.get("manual_total_seconds")) != length:
-        raise SyncError("The app did not save the expected audiobook length.")
-    changes = {
-        k: book.get(k)
-        for k in ("status", "started_reading_at", "finished_reading_at")
-        if fresh.get(k) != book.get(k)
-    }
-    if changes:
-        result = await api.request("PATCH", "/books", json={"items": [{"id": int(bid), **changes}]})
-        if len(result["results"]) != 1 or result["results"][0].get("error"):
-            raise SyncError("Could not restore the original shelf and reading dates.")
-        fresh_books = await api.list("/books", ids=bid)
-        if (
-            len(fresh_books) != 1
-            or str(fresh_books[0]["id"]) != bid
-            or any(fresh_books[0].get(k) != v for k, v in changes.items())
-            or saved_audio_length(fresh_books[0].get("manual_total_seconds")) != length
-        ):
-            raise SyncError("Shelf and date restoration needs review.")
-        fresh = fresh_books[0]
-    if any(fresh.get(k) != book.get(k) for k in ("rating", "review")):
-        raise SyncError("Editorial fields changed during length setup. Review the book.")
-    book.update(fresh)
-    with con:
-        con.execute("update length_attempts set status='confirmed' where book_id=?", (bid,))
-    return "updated"

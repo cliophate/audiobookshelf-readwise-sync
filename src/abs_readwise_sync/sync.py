@@ -12,6 +12,7 @@ from .clients import ABSClient, AppClient, BooksClient
 from .config import SyncError
 from .durations import saved_audio_length
 from .audio_safety import SuspectAudioRange
+from .public_lengths import DurationSetupError, ensure_length
 from .matching import item_metadata, same_work
 from .storage import bind_identity, cache_bundle, database
 from .audio_sources import fit_audio_endpoint, save_issue, resolve_issue, source_issue
@@ -126,7 +127,7 @@ def build_plan(con, settings, bundle, books, sessions, now=None):
         unfinished_length = (
             book
             and con.execute(
-                "select 1 from length_attempts where book_id=? and status!='confirmed'",
+                "select 1 from length_attempts where book_id=? and status not in ('confirmed','api_rejected')",
                 (str(book["id"]),),
             ).fetchone()
         )
@@ -154,16 +155,10 @@ def build_plan(con, settings, bundle, books, sessions, now=None):
                     "Readwise has no saved manual audiobook length, and ABS has no usable duration. "
                     "Set the correct length in Readwise Books before importing sessions."
                 )
-            elif settings.app_session:
-                reason = (
-                    "Readwise manual_total_seconds is null or invalid. Optional setup can save "
-                    "the ABS duration with --apply before importing."
-                )
             else:
                 reason = (
-                    "Readwise manual_total_seconds is null or invalid. Set the audiobook length "
-                    "in the app's manual tracking form and cancel any temporary timer. "
-                    "Or configure --login for optional automatic setup."
+                    "Readwise manual_total_seconds is null or invalid. Use --apply to save the "
+                    "ABS duration through the public API before importing. No app login is needed."
                 )
             plan["length_help"] = reason
         for source in sorted(sources, key=lambda s: float(s.get("startedAt") or 0)):
@@ -320,54 +315,51 @@ async def run_once(settings, *, apply=False, transport=None, delay=3.1, accept_t
             retain_plan_issues(con, plans, bundle)
             if not apply:
                 return report(plans, "preview", bundle=bundle)
-            if app:
-                for plan in plans:
-                    session_setup = any(
-                        s["status"] in ("unmatched", "needs_length") for s in plan["sessions"]
+            for plan in plans:
+                session_setup = any(
+                    s["status"] in ("unmatched", "needs_length") for s in plan["sessions"]
+                )
+                shelf_setup = plan.get("shelf", {}).get("status") == "needs_book"
+                finish_setup = plan.get("shelf", {}).get("desired") == "finished" and plan.get(
+                    "shelf", {}
+                ).get("status") in ("needs_length", "needs_book")
+                if not session_setup and not shelf_setup and not finish_setup:
+                    continue
+                metadata = item_metadata(bundle["items"][plan["abs_item_id"]])
+                book, state = resolve_book(
+                    con, plan["abs_item_id"], metadata, books, settings.mappings()
+                )
+                if state == "unmatched" and app:
+                    book, catalog_state = await optional.add_book(
+                        con, api, app, plan["abs_item_id"], metadata
                     )
-                    shelf_setup = plan.get("shelf", {}).get("status") == "needs_book"
-                    finish_setup = plan.get("shelf", {}).get("desired") == "finished" and plan.get(
-                        "shelf", {}
-                    ).get("status") in ("needs_length", "needs_book")
-                    if not session_setup and not shelf_setup and not finish_setup:
-                        continue
-                    metadata = item_metadata(bundle["items"][plan["abs_item_id"]])
-                    book, state = resolve_book(
-                        con, plan["abs_item_id"], metadata, books, settings.mappings()
-                    )
-                    if state == "unmatched":
-                        book, catalog_state = await optional.add_book(
-                            con, api, app, plan["abs_item_id"], metadata
+                    if catalog_state == "ambiguous":
+                        bundle.setdefault("ambiguous_catalog", []).append(plan["abs_item_id"])
+                    if book:
+                        books.append(book)
+                if (
+                    book
+                    and (session_setup or finish_setup)
+                    and positive_length(metadata["duration"])
+                ):
+                    try:
+                        length_result = await ensure_length(
+                            con, api, book, positive_length(metadata["duration"])
                         )
-                        if catalog_state == "ambiguous":
-                            bundle.setdefault("ambiguous_catalog", []).append(plan["abs_item_id"])
-                        if book:
-                            books.append(book)
-                    if (
-                        book
-                        and (session_setup or finish_setup)
-                        and positive_length(metadata["duration"])
-                    ):
-                        length_result = await optional.ensure_length(
-                            con,
-                            api,
-                            app,
-                            book,
-                            positive_length(metadata["duration"]),
-                            settings.timezone,
+                    except DurationSetupError as exc:
+                        raise SyncError(str(exc)) from None
+                    if length_result == "rejected":
+                        bundle.setdefault("setup_notes", {})[plan["abs_item_id"]] = (
+                            "Readwise rejected the audiobook length update. Finish or cancel any "
+                            "active reading session for this book, then retry. If it persists, review the book."
                         )
-                        if length_result == "session_active":
-                            bundle.setdefault("setup_notes", {})[plan["abs_item_id"]] = (
-                                "An active manual session prevented audiobook length setup. "
-                                "Finish or cancel it in Readwise Books, then retry."
-                            )
-                        elif length_result == "needs_review":
-                            bundle.setdefault("setup_notes", {})[plan["abs_item_id"]] = (
-                                "A previous audiobook length setup needs review. "
-                                "It will not be repeated automatically. Keep the local ledger."
-                            )
-                plans = build_plan(con, settings, bundle, books, sessions)
-                retain_plan_issues(con, plans, bundle)
+                    elif length_result == "needs_review":
+                        bundle.setdefault("setup_notes", {})[plan["abs_item_id"]] = (
+                            "A previous audiobook length setup needs review. "
+                            "It will not be repeated automatically. Keep the local ledger."
+                        )
+            plans = build_plan(con, settings, bundle, books, sessions)
+            retain_plan_issues(con, plans, bundle)
             pending = []
             with con:
                 for plan in plans:

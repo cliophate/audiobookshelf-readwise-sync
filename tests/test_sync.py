@@ -56,6 +56,7 @@ class Server:
         self.item_duration = 1000
         self.active = None
         self.app_start_count = 0
+        self.length_update_count = 0
         self.readwise_token = "test-readwise-token"
 
     @property
@@ -117,6 +118,21 @@ class Server:
                     )
                 if request.method == "PATCH" and kind == "books":
                     item = json.loads(request.content)["items"][0]
+                    if "manual_total_seconds" in item:
+                        self.length_update_count += 1
+                        if self.active and self.active.get("tracked_book_id", 42) == item["id"]:
+                            return httpx.Response(
+                                200,
+                                json={
+                                    "results": [
+                                        {
+                                            "id": item["id"],
+                                            "status": "error",
+                                            "error": {"code": "invalid_value"},
+                                        }
+                                    ]
+                                },
+                            )
                     self.books[0].update(item)
                     return httpx.Response(
                         200, json={"results": [{"status": "updated", "book_id": 42}]}
@@ -218,13 +234,15 @@ class SyncTests(SyncFixture, unittest.IsolatedAsyncioTestCase):
         self.assertFalse(session["publish_to_feed"])
         self.assertFalse(any("/bookwise/api/" in r.url.path for r in self.server.requests))
 
-    async def test_missing_length_blocks_token_only_without_private_requests(self):
+    async def test_token_only_sets_missing_length_without_private_requests(self):
         self.server.books[0]["manual_total_seconds"] = None
         result = await self.run_sync(apply=True)
-        self.assertEqual(result["summary"], {"needs_length": 1})
-        self.assertEqual(self.server.writes, [])
-        self.server.books[0]["manual_total_seconds"] = 1000
-        self.assertEqual((await self.run_sync(apply=True))["result"], {"confirmed": 1})
+        self.assertEqual(result["result"], {"confirmed": 1})
+        self.assertEqual(self.server.books[0]["manual_total_seconds"], 1000)
+        self.assertEqual(self.server.length_update_count, 1)
+        self.assertFalse(any("/bookwise/api/" in r.url.path for r in self.server.requests))
+        await self.run_sync(apply=True)
+        self.assertEqual(self.server.length_update_count, 1)
 
     async def test_unmatched_book_stays_for_manual_setup_without_app_credential(self):
         self.server.books = []
@@ -397,9 +415,10 @@ class SyncTests(SyncFixture, unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.run_sync(apply=True))["result"], {"confirmed": 1})
         self.assertEqual(self.server.books[0]["manual_total_seconds"], 1000)
         self.assertIsNone(self.server.active)
-        self.assertEqual(self.server.app_start_count, 1)
+        self.assertEqual(self.server.app_start_count, 0)
+        self.assertEqual(self.server.length_update_count, 1)
         await self.run_sync(apply=True)
-        self.assertEqual(self.server.app_start_count, 1)
+        self.assertEqual(self.server.length_update_count, 1)
 
     async def test_app_automation_leaves_existing_length_alone(self):
         self.settings = dataclasses.replace(self.settings, app_session="test-app-session")
@@ -413,7 +432,11 @@ class SyncTests(SyncFixture, unittest.IsolatedAsyncioTestCase):
         self.server.books[0]["manual_total_seconds"] = None
         self.server.active = {"id": 15}
         self.assertEqual((await self.run_sync(apply=True))["summary"], {"needs_length": 1})
-        self.assertEqual(self.server.writes, [])
+        self.assertEqual(self.server.length_update_count, 1)
+        self.assertEqual(self.server.active, {"id": 15})
+        self.assertEqual(self.server.sessions, [])
+        self.server.active = None
+        self.assertEqual((await self.run_sync(apply=True))["result"], {"confirmed": 1})
 
     async def test_app_automation_restores_finished_shelf(self):
         self.settings = dataclasses.replace(self.settings, app_session="test-app-session")
@@ -427,7 +450,10 @@ class SyncTests(SyncFixture, unittest.IsolatedAsyncioTestCase):
         original = self.server.respond
 
         def respond(request):
-            if request.url.path.endswith("/manual_sessions/start"):
+            if (
+                request.method == "PATCH"
+                and "manual_total_seconds" in json.loads(request.content)["items"][0]
+            ):
                 self.server.requests.append(request)
                 raise httpx.ReadTimeout("private timeout", request=request)
             return original(request)
@@ -439,23 +465,17 @@ class SyncTests(SyncFixture, unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.run_sync(apply=True))["summary"], {"setup_needs_review": 1})
         self.assertEqual(len(self.server.writes), count)
 
-    async def test_cancel_timeout_blocks_import_even_when_length_was_saved(self):
-        self.settings = dataclasses.replace(self.settings, app_session="test-app-session")
-        self.server.books[0]["manual_total_seconds"] = None
-        original = self.server.respond
-
-        def respond(request):
-            if request.url.path.endswith("/manual_sessions/cancel"):
-                self.server.requests.append(request)
-                raise httpx.ReadTimeout("private timeout", request=request)
-            return original(request)
-
-        self.transport = httpx.MockTransport(respond)
-        with self.assertRaises(SyncError):
-            await self.run_sync(apply=True)
-        self.assertEqual(self.server.books[0]["manual_total_seconds"], 1000)
+    async def test_legacy_cancel_pending_blocks_import_even_when_length_was_saved(self):
+        await self.run_sync()
+        con = self.db()
+        con.execute(
+            "insert into length_attempts values(?,?,?,?,?)",
+            ("42", 1000, "cancel_pending", "99", "{}"),
+        )
+        con.commit()
         self.assertEqual((await self.run_sync(apply=True))["summary"], {"setup_needs_review": 1})
         self.assertEqual(self.server.sessions, [])
+        self.assertEqual(self.server.writes, [])
 
     async def test_101_sessions_use_two_abs_pages_and_batches_of_ten(self):
         self.server.sources = [
