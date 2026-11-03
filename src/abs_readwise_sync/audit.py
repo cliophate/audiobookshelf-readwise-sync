@@ -14,6 +14,8 @@ from .clients import ABSClient, BooksClient
 from .config import SyncError
 from .matching import item_metadata, same_work
 from .permissions import access_message, local_call
+from .audio_safety import metrics
+from .import_review import review_records
 
 
 def number(value):
@@ -235,6 +237,14 @@ async def audit_book(settings, item_id, *, transport=None, delay=3.1):
         )
         duplicates[key].append(str(row["id"]))
     confirmed = [r for r in exports if r["status"] == "confirmed"]
+    source_review = []
+    for source in sources:
+        try:
+            values = metrics(source)
+            if not values["plausible"]:
+                source_review.append({"source_id": source["id"], **values})
+        except (KeyError, ValueError, TypeError, OverflowError):
+            continue  # Basic invalid records are already listed in source_issues.
     warnings = []
     remote_spans = spans(audio, "seconds_at_start", "seconds_at_end")
     if history["repeated_audio_seconds"] or remote_spans["repeated_audio_seconds"]:
@@ -297,6 +307,8 @@ async def audit_book(settings, item_id, *, transport=None, delay=3.1):
                 for issue in bundle["issues"]
                 if issue["item_id"] == item_id
             ],
+            "suspect_abs_ranges": source_review,
+            "import_review": review_records(exports),
             "abs_sessions": [
                 {
                     k: r.get(k)

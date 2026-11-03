@@ -9,6 +9,7 @@ from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .permissions import access_message, local_call
+from .audio_safety import playback_limit
 
 
 class SyncError(Exception):
@@ -83,6 +84,10 @@ class Settings:
 
     @classmethod
     def load(cls, *, include_app=True):
+        try:
+            playback_limit()
+        except ValueError as exc:
+            raise SyncError(str(exc)) from None
         url = os.getenv("AUDIOBOOKSHELF_URL", "").rstrip("/")
         parsed = urlsplit(url)
         if (

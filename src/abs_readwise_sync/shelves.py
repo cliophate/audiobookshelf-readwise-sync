@@ -82,10 +82,10 @@ def annotate(con, plans, bundle, books):
                 "Finished is blocked until the Readwise audiobook length is saved and verified."
             )
         elif shelf["desired"] == "finished" and any(
-            row["status"] == "position_exceeds_length" for row in plan["sessions"]
+            row["status"] in ("position_exceeds_length", "needs_review") for row in plan["sessions"]
         ):
             shelf["reason"] = (
-                "Finished is blocked because an audio position exceeds the saved length."
+                "Finished is blocked because source timing or an audio position needs review."
             )
         else:
             shelf["status"] = "unchanged" if shelf["current"] == shelf["desired"] else "ready"

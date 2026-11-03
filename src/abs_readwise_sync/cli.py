@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import sqlite3
 import sys
 
 import httpx
@@ -15,12 +16,25 @@ from .audit import audit_book
 from .clients import BooksClient
 from .config import Settings, SyncError
 from .login import login
+from .import_review import review_database
 from .permissions import access_message
 from .sync import run_once
 from .storage import database
 
 
 async def run(args):
+    if getattr(args, "review_imports", False):
+        path = Path(os.getenv("DATA_DIR", "./data")) / "sync.sqlite"
+        try:
+            result = review_database(path)
+        except PermissionError:
+            raise SyncError(access_message("reviewing existing imports", path)) from None
+        except (OSError, sqlite3.Error, ValueError, TypeError, KeyError):
+            raise SyncError(
+                "Cannot review the export ledger. Keep it and check its integrity and configuration."
+            ) from None
+        print(json.dumps(result, indent=2, allow_nan=False))
+        return 0
     if getattr(args, "login", False):
         if os.getenv("READWISE_APP_SESSION", "").strip():
             raise SyncError("Unset READWISE_APP_SESSION before using file-based device login.")
@@ -188,6 +202,11 @@ def main():
     parser.add_argument("--watch", action="store_true", help="repeat at POLL_MINUTES intervals")
     parser.add_argument("--json", action="store_true", help="include session details as JSON")
     parser.add_argument(
+        "--review-imports",
+        action="store_true",
+        help="review existing imports locally without credentials, HTTP requests or history changes",
+    )
+    parser.add_argument(
         "--audit",
         metavar="ABS_ITEM_ID",
         help="read-only comparison of one book's ABS, ledger and Readwise sessions",
@@ -214,6 +233,21 @@ def main():
         help="confirm a replacement Readwise token belongs to the same account; preview only",
     )
     args = parser.parse_args()
+    if args.review_imports and any(
+        (
+            args.apply,
+            args.watch,
+            args.audit,
+            args.login,
+            args.replace_session,
+            args.issues,
+            args.list_books,
+            args.accept_token_change,
+        )
+    ):
+        parser.error(
+            "Run --review-imports separately from login, sync and other inspection commands"
+        )
     if args.audit and any(
         (
             args.apply,

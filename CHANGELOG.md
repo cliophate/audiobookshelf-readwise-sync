@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.5 - 2026-11-03
+
+### Fixed
+
+- Implausible ABS audio ranges are held as `needs_review`. The sync compares the audio span with measured listening time, allows playback up to `AUDIO_MAX_PLAYBACK_SPEED` by default 4x plus five seconds, and checks listening time against elapsed time with the same five-second allowance. Distinct source IDs with incorrect starting positions can no longer bypass this check. Valid sessions continue.
+- Finished shelf changes are blocked when source timing needs review. Original source records and export checkpoints remain intact. The sync never estimates a missing starting position or removes genuine re-listening.
+
+### Added
+
+- `--review-imports` checks existing exports and their saved source observations locally. It needs no credentials or network connection and changes no files or history. It distinguishes suspect timing from missing observations, accounts for cumulative-session listening deltas, and reports the affected Readwise session IDs for review.
+- Per-book audits include suspect source ranges and the existing-import review. These reports are previews, not deletion lists. Missing positions cannot be reconstructed from listening time alone, and current remote ownership and edits must be checked before any manual correction.
+- Regression tests for the reported five-second session covering almost ten audio hours, separate source IDs, legitimate re-listening, fast playback, continuation deltas, and read-only history review.
+
 ## 0.1.4 - 2026-11-02
 
 ### Fixed

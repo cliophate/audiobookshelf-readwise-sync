@@ -8,7 +8,7 @@ The default setup uses your regular Readwise API token. An extra app session cre
 
 This is an early standalone release extracted from a personal reading stats app. The original integration runs daily; this extracted version has automated HTTP tests and a Docker build check. It has not yet had a separate live-account trial. Start with the preview and check a small import before enabling the background worker.
 
-Version 0.1.4 blocks Finished until the saved audiobook duration is verified, reports filesystem access problems with paths and ownership, and adds a read-only per-book session audit. Optional shelves, book selection and device login are included.
+Version 0.1.5 holds implausible audio ranges for review and adds a local review of existing imports. It preserves the original positions and history. Finished also waits when source timing needs review.
 
 See the [changelog](CHANGELOG.md) for version history and update instructions.
 
@@ -136,13 +136,13 @@ Stop the worker with `docker compose stop sync`. Nothing is deleted from either 
 
 ### NAS and prebuilt images
 
-The [v0.1.4 release](https://github.com/cliophate/audiobookshelf-readwise-sync/releases/tag/v0.1.4) provides tagged Docker image archives for `linux-amd64` and `linux-arm64`. Choose the one matching your NAS. Import it in Container Manager, or load it with Docker:
+The [v0.1.5 release](https://github.com/cliophate/audiobookshelf-readwise-sync/releases/tag/v0.1.5) provides tagged Docker image archives for `linux-amd64` and `linux-arm64`. Choose the one matching your NAS. Import it in Container Manager, or load it with Docker:
 
 ```sh
-docker load --input audiobookshelf-readwise-sync-v0.1.4-linux-amd64.tar.gz
+docker load --input audiobookshelf-readwise-sync-v0.1.5-linux-amd64.tar.gz
 ```
 
-The image is named `audiobookshelf-readwise-sync:0.1.4`. Use the normal configuration above, with the image override:
+The image is named `audiobookshelf-readwise-sync:0.1.5`. Use the normal configuration above, with the image override:
 
 ```sh
 docker compose -f compose.yaml -f compose.image.yaml run --rm sync --json
@@ -286,7 +286,7 @@ The audit makes GET requests and opens an existing ledger read-only. It never im
 
 The JSON report includes ABS listening seconds and audio positions, confirmed local exports and their Readwise session IDs, active Readwise totals by format, repeated audio ranges, identical session groups and ABS items sharing the same Readwise book. It also shows deleted remote sessions separately. It omits credentials, reviews, captions and raw response bodies, but contains listening dates and positions. Review it before sharing.
 
-Readwise's [documented session API](https://readwise.io/books_api) computes audiobook time from end position minus start position. It does not use wall-clock listening time or the supplied pause duration for that total. The audit keeps this figure separate from ABS's `timeListening`. Repeated ranges may reflect re-listening, seeks or cumulative source data. Sessions without a ledger ID may be manual entries or imports completed during the audit. Neither observation alone proves a duplicate. This release does not change the accounting rules or remove existing sessions.
+Readwise's [documented session API](https://readwise.io/books_api) computes audiobook time from end position minus start position. It does not use wall-clock listening time or the supplied pause duration for that total. The audit keeps this figure separate from ABS's `timeListening`. Repeated ranges may reflect re-listening, seeks or cumulative source data. Sessions without a ledger ID may be manual entries or imports completed during the audit. Neither observation alone proves a duplicate. The importer now checks whether the positions are plausible before exporting. Existing sessions remain unchanged.
 
 ## Permission and NAS storage errors
 
@@ -295,6 +295,30 @@ Storage errors now identify the operation, file path, container UID/GID, and the
 Check that `PUID` and `PGID` match the NAS user who owns the bind-mounted `data` directory. Check NAS ACLs and whether the mount is read-only too. A mode such as `777` does not establish why an operation failed, and this tool does not reject a sync database merely for having that mode. Do not loosen permissions to work around an error. Keep credential files at `600` in a private directory; the tool never changes existing permissions or ownership to recover from an access failure.
 
 Device login verifies that its new temporary credential file has mode `600` before writing the credential. If a filesystem forces broader permissions, login stops and leaves an existing credential untouched. Use a private folder or mount that supports owner-only permissions.
+
+## Suspect audio ranges and existing imports
+
+An ABS session can have a unique ID but an incorrect starting position. For example, five seconds of listening paired with positions 0 to 35,285 would add almost ten audio hours to Readwise. The sync now keeps that session as `needs_review` and continues with valid sessions.
+
+`AUDIO_MAX_PLAYBACK_SPEED` defaults to `4`. An audio span above measured listening time multiplied by this limit, plus five seconds for rounding, needs review. Measured listening time above elapsed time plus five seconds also needs review. Set the limit to your actual maximum if you listen faster than 4x. This is a plausibility check, not proof that every accepted range is accurate. Seeks within a plausible range may still be indistinguishable from playback.
+
+To review previously imported sessions without credentials, HTTP requests or history changes:
+
+```sh
+docker compose run --rm sync --review-imports
+```
+
+For a prebuilt NAS image:
+
+```sh
+docker compose -f compose.yaml -f compose.image.yaml run --rm sync --review-imports
+```
+
+The review uses the saved payloads and source checkpoints, including listening-time deltas for cumulative sessions. It lists suspect ranges and entries whose original observations are missing. `plausible` means only that the saved interval passes these checks. Repeated audio alone does not trigger removal, and the command never deletes or rewrites sessions, creates a database, or clears the ledger.
+
+Pause imports while investigating affected history. Use `--audit ABS_ITEM_ID` to compare flagged entries with Readwise. A local review does not prove that the remote session is still unchanged or belongs to this import. Check the session ID, book, timings, positions and device against the current remote record before any manual correction. Preserve manual entries and the existing ledger. Deleting the ledger can reimport the same bad history.
+
+Historical starting positions cannot be recovered from `timeListening` alone, especially with accelerated playback or seeks. This version does not guess replacement ranges or automatically delete suspect imports. It also cannot repair the listening app's source records. Keep uncertain entries for review and identify the recording client and version when reporting them.
 
 ## Settings and credentials
 

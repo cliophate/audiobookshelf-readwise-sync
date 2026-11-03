@@ -65,6 +65,8 @@ class ConfigTests(unittest.TestCase):
             {"TIMEZONE": "not-a-timezone"},
             {"POLL_MINUTES": "0"},
             {"SETTLE_MINUTES": "no"},
+            {"AUDIO_MAX_PLAYBACK_SPEED": "nan"},
+            {"AUDIO_MAX_PLAYBACK_SPEED": "0"},
             {"AUDIOBOOKSHELF_URL": "https://user:password@abs.test"},
             {"AUDIOBOOKSHELF_URL": "https://abs.test?key=private"},
         ):

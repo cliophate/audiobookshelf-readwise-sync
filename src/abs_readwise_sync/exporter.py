@@ -9,6 +9,8 @@ import hashlib
 import os
 from datetime import datetime, timedelta, timezone
 
+from .audio_safety import check_audio_range
+
 
 def publish_session(source, now=None):
     """Publish new listening only; historical and delayed backfills stay quiet."""
@@ -25,6 +27,7 @@ def publish_session(source, now=None):
 
 
 def payload(source, book_id, *, publish_to_feed=False, timezone_name=None):
+    check_audio_range(source)
     seconds = round(float(source["timeListening"]))
     start = round(float(source["startedAt"]) / 1000)
     end = round(float(source["updatedAt"]) / 1000)

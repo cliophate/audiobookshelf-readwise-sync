@@ -11,6 +11,7 @@ from . import exporter, optional, shelves
 from .clients import ABSClient, AppClient, BooksClient
 from .config import SyncError
 from .durations import saved_audio_length
+from .audio_safety import SuspectAudioRange
 from .matching import item_metadata, same_work
 from .storage import bind_identity, cache_bundle, database
 from .audio_sources import fit_audio_endpoint, save_issue, resolve_issue, source_issue
@@ -238,6 +239,9 @@ def build_plan(con, settings, bundle, books, sessions, now=None):
                             row["status"] = "ready"
                             row["_candidate"] = candidate
                             occupied.append(item)
+            except SuspectAudioRange as exc:
+                row["status"] = "needs_review"
+                row["reason"] = str(exc)
             except (ValueError, KeyError, TypeError, OverflowError):
                 row["status"] = "needs_review"
                 row["reason"] = "Source timing, identity, or previous submission needs review."

@@ -1,5 +1,5 @@
 # Load the release image archive for your CPU before using this override.
 services:
   sync:
-    image: audiobookshelf-readwise-sync:0.1.4
+    image: audiobookshelf-readwise-sync:0.1.5
     pull_policy: never

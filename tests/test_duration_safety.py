@@ -5,6 +5,7 @@ import httpx
 from abs_readwise_sync.config import SyncError
 from abs_readwise_sync.durations import saved_audio_length
 from test_shelves_and_matching import ShelfFixture
+from test_sync import source
 
 
 class DurationTests(unittest.TestCase):
@@ -17,6 +18,15 @@ class DurationTests(unittest.TestCase):
 
 
 class FinishSafetyTests(ShelfFixture, unittest.IsolatedAsyncioTestCase):
+    async def test_suspect_source_blocks_finished_without_changing_history(self):
+        self.enable()
+        self.server.sources = [source(startTime=0, currentTime=900, timeListening=1)]
+        result = await self.run_sync(apply=True)
+        self.assertEqual(result["summary"], {"needs_review": 1})
+        self.assertEqual(result["shelf_summary"], {"needs_review": 1})
+        self.assertEqual(self.server.writes, [])
+        self.assertIn("Suspect audio range", result["books"][0]["sessions"][0]["reason"])
+
     async def test_invalid_lengths_block_finished_and_session_posts(self):
         self.enable()
         for value in (None, 0, -1, True, "1000", 1000.5):
