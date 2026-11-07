@@ -11,6 +11,8 @@ from unittest.mock import patch
 import httpx
 
 from abs_readwise_sync import exporter
+from abs_readwise_sync.history import approve
+from abs_readwise_sync.storage import database
 from abs_readwise_sync.clients import ABSClient, AppClient, BooksClient
 from abs_readwise_sync.config import Settings, SyncError
 from abs_readwise_sync.matching import item_metadata, same_work
@@ -216,6 +218,14 @@ class SyncFixture:
         self.addCleanup(con.close)
         return con
 
+    def approve_history(self, result):
+        with database(self.settings) as con:
+            for book in result["books"]:
+                if book.get("history_review"):
+                    approve(
+                        con, self.settings, book["abs_item_id"], book["history_review"]["token"]
+                    )
+
 
 class SyncTests(SyncFixture, unittest.IsolatedAsyncioTestCase):
     async def test_token_only_preview_then_backfill_then_repeat_without_duplicates(self):
@@ -253,12 +263,16 @@ class SyncTests(SyncFixture, unittest.IsolatedAsyncioTestCase):
         self.server.books.append({**self.server.books[0], "id": 43})
         self.assertEqual((await self.run_sync(apply=True))["summary"], {"ambiguous": 1})
         self.settings.mappings_file.write_text(json.dumps({"item-1": 43}))
+        held = await self.run_sync()
+        self.assertEqual(held["summary"], {"history_needs_review": 1})
+        self.approve_history(held)
         self.assertEqual((await self.run_sync(apply=True))["result"], {"confirmed": 1})
         self.assertEqual(self.server.sessions[0]["book_id"], 43)
 
     async def test_explicit_mapping_can_resolve_different_catalog_title(self):
         self.server.books[0]["title"] = "A different edition title"
         self.settings.mappings_file.write_text(json.dumps({"item-1": 42}))
+        self.approve_history(await self.run_sync())
         self.assertEqual((await self.run_sync(apply=True))["result"], {"confirmed": 1})
 
     async def test_changing_mapping_after_import_is_blocked(self):
@@ -412,6 +426,10 @@ class SyncTests(SyncFixture, unittest.IsolatedAsyncioTestCase):
     async def test_opted_in_app_automation_adds_book_sets_length_then_imports(self):
         self.settings = dataclasses.replace(self.settings, app_session="test-app-session")
         self.server.books = []
+        held = await self.run_sync(apply=True)
+        self.assertEqual(held["summary"], {"history_needs_review": 1})
+        self.assertEqual(self.server.sessions, [])
+        self.approve_history(held)
         self.assertEqual((await self.run_sync(apply=True))["result"], {"confirmed": 1})
         self.assertEqual(self.server.books[0]["manual_total_seconds"], 1000)
         self.assertIsNone(self.server.active)
@@ -619,9 +637,9 @@ class MatchingTests(unittest.TestCase):
             same_work(metadata, {"title": "A Book: Part One", "author": "Ada Example"})
         )
 
-    def test_edition_suffixes_match_but_different_subtitles_do_not(self):
+    def test_full_cast_editions_and_different_subtitles_require_review(self):
         a = {"title": "A Book (Full-Cast Edition)", "author": "Ada Example"}
-        self.assertTrue(same_work(a, {"title": "A Book", "author": "Ada Example"}))
+        self.assertFalse(same_work(a, {"title": "A Book", "author": "Ada Example"}))
         self.assertFalse(same_work(a, {"title": "A Book", "author": "Another Person"}))
         self.assertFalse(
             same_work(

@@ -66,6 +66,16 @@ def _database(settings):
                     previous_json text not null,desired text not null,status text not null);
                 create index if not exists shelf_attempts_item_status
                     on shelf_attempts(item_id,status);
+                create table if not exists history_boundaries(
+                    item_id text,book_id text,cutoff real not null,
+                    primary key(item_id,book_id));
+                create table if not exists history_previews(
+                    token text primary key,item_id text,book_id text,entries_json text not null);
+                create table if not exists history_approvals(
+                    item_id text,book_id text,source_id text,snapshot_hash text,
+                    primary key(item_id,book_id,source_id,snapshot_hash));
+                create table if not exists attention(
+                    key text primary key,fingerprint text not null);
             """)
             yield con
         finally:

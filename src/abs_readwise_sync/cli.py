@@ -12,14 +12,18 @@ import sys
 import httpx
 
 from . import __version__
+from . import history
+from .attention import print_report
 from .audit import audit_book
 from .clients import BooksClient
 from .config import Settings, SyncError
 from .login import login
 from .import_review import review_database
-from .permissions import access_message
-from .sync import run_once
+from .permissions import access_message, local_call
+from .sync import resolve_match, run_once
 from .storage import database
+from .matching import catalog_candidates
+from .review_commands import cached_metadata, check_identity, save_mapping
 
 
 async def run(args):
@@ -59,7 +63,57 @@ async def run(args):
         settings = Settings.load(include_app=False)
         print(json.dumps(await audit_book(settings, args.audit), indent=2, allow_nan=False))
         return 0
-    settings = Settings.load()
+    review_action = next(
+        (name for name in ("candidates", "map", "approve_history") if getattr(args, name, None)),
+        None,
+    )
+    settings = Settings.load(include_app=False) if review_action else Settings.load()
+    if review_action:
+        with database(settings) as con:
+            check_identity(con, settings)
+            if review_action == "approve_history":
+                result = history.approve(con, settings, *args.approve_history)
+            else:
+                item_id = args.candidates if review_action == "candidates" else args.map[0]
+                metadata = cached_metadata(con, item_id)
+                async with httpx.AsyncClient(timeout=60, trust_env=False) as http:
+                    api = BooksClient(http, settings.readwise_token)
+                    if review_action == "candidates":
+                        books = await api.list("/books")
+                        candidates = catalog_candidates(metadata, books)
+                        selected, state, matching = resolve_match(
+                            con, item_id, metadata, books, settings.mappings()
+                        )
+                        result = {
+                            "abs_item_id": item_id,
+                            "title": metadata["title"],
+                            "candidates": candidates,
+                            "matching_status": state,
+                            "selected_readwise_book_id": str(selected["id"]) if selected else None,
+                            "previous_status": matching.get("previous_status"),
+                            "previous_readwise_book_ids": matching.get(
+                                "previous_readwise_book_ids", []
+                            ),
+                            "reason": "No related library entries found."
+                            if not candidates
+                            else "Choose an active library book ID with --map ABS_ITEM_ID READWISE_BOOK_ID.",
+                        }
+                    else:
+                        bid = args.map[1]
+                        if not bid.isdigit() or int(bid) < 1:
+                            raise SyncError(
+                                "Readwise library book ID must be a positive whole number."
+                            )
+                        books = await api.list("/books", ids=bid)
+                        if len(books) != 1 or str(books[0]["id"]) != bid:
+                            raise SyncError("Selected Readwise library book was not found.")
+                        result = local_call(
+                            "saving book mappings",
+                            settings.mappings_file,
+                            lambda: save_mapping(con, settings, item_id, books[0]),
+                        )
+        print(json.dumps(result, indent=2))
+        return 0
     if args.issues:
         with database(settings) as con:
             keys = ("source_id", "abs_item_id", "status", "reason", "first_seen_at", "last_seen_at")
@@ -92,7 +146,18 @@ async def run(args):
                 [
                     {
                         key: b.get(key)
-                        for key in ("id", "title", "author", "status", "manual_total_seconds")
+                        for key in (
+                            "id",
+                            "title",
+                            "author",
+                            "status",
+                            "manual_total_seconds",
+                            "product",
+                            "isbn",
+                            "asin",
+                            "subtitle",
+                            "series",
+                        )
                     }
                     for b in books
                     if b.get("status") != "deleted"
@@ -119,58 +184,9 @@ async def run(args):
             if args.json:
                 print(json.dumps(result, indent=2), flush=True)
             else:
-                print(
-                    f"{result['mode']}: {json.dumps(result['summary'], sort_keys=True)}", flush=True
+                print_report(
+                    settings, result, show_all=getattr(args, "show_all", False) or not args.watch
                 )
-                for book in result["books"]:
-                    counts = {}
-                    for session in book["sessions"]:
-                        counts[session["status"]] = counts.get(session["status"], 0) + 1
-                    print(
-                        f"  {book['title']} | ABS {book['abs_item_id']} | "
-                        f"Readwise {book['readwise_book_id'] or 'unmatched'} | {counts}",
-                        flush=True,
-                    )
-                    if book.get("length_help"):
-                        print("    Length: " + book["length_help"], flush=True)
-                    if book.get("shelf"):
-                        shelf = book["shelf"]
-                        print(
-                            f"    Shelf: {shelf['current']} -> {shelf['desired']} "
-                            f"({shelf['status']})"
-                            + (" " + shelf["reason"] if shelf.get("reason") else ""),
-                            flush=True,
-                        )
-                if result["result"]:
-                    print("  Imported: " + json.dumps(result["result"], sort_keys=True), flush=True)
-                diagnostics = [
-                    {
-                        "source_id": row["source_id"],
-                        "reason": row["reason"],
-                        **{
-                            key: row[key]
-                            for key in (
-                                "abs_position_seconds",
-                                "abs_length_seconds",
-                                "readwise_length_seconds",
-                            )
-                            if key in row
-                        },
-                    }
-                    for book in result["books"]
-                    for row in book["sessions"]
-                    if row.get("reason")
-                ]
-                diagnostics.extend(result.get("source_issues", []))
-                for issue in diagnostics[:20]:
-                    print("  Review: " + json.dumps(issue, sort_keys=True), flush=True)
-                if len(diagnostics) > 20:
-                    print(
-                        "  More records are retained locally. Use --issues to list them.",
-                        flush=True,
-                    )
-                if not args.apply:
-                    print("Preview only. Use --apply after checking the matches.", flush=True)
         except (SyncError, ValueError, KeyError, TypeError, OSError, RuntimeError) as exc:
             # Only SyncError messages are approved for display. HTTP bodies and URLs
             # can contain private data; do not print arbitrary exception messages.
@@ -201,6 +217,26 @@ def main():
     parser.add_argument("--apply", action="store_true", help="allow book setup and session imports")
     parser.add_argument("--watch", action="store_true", help="repeat at POLL_MINUTES intervals")
     parser.add_argument("--json", action="store_true", help="include session details as JSON")
+    parser.add_argument(
+        "--show-all", action="store_true", help="repeat unchanged attention entries in watch logs"
+    )
+    parser.add_argument(
+        "--candidates",
+        metavar="ABS_ITEM_ID",
+        help="show all related library entries and matching explanations",
+    )
+    parser.add_argument(
+        "--map",
+        nargs=2,
+        metavar=("ABS_ITEM_ID", "READWISE_BOOK_ID"),
+        help="save a manual mapping without importing or changing Readwise",
+    )
+    parser.add_argument(
+        "--approve-history",
+        nargs=2,
+        metavar=("ABS_ITEM_ID", "REVIEW_TOKEN"),
+        help="approve exactly the historical source snapshots in a saved preview; no remote writes",
+    )
     parser.add_argument(
         "--review-imports",
         action="store_true",
@@ -233,6 +269,24 @@ def main():
         help="confirm a replacement Readwise token belongs to the same account; preview only",
     )
     args = parser.parse_args()
+    review_actions = (args.candidates, args.map, args.approve_history)
+    if any(review_actions) and (
+        sum(bool(a) for a in review_actions) > 1
+        or any(
+            (
+                args.apply,
+                args.watch,
+                args.audit,
+                args.login,
+                args.replace_session,
+                args.issues,
+                args.list_books,
+                args.accept_token_change,
+                args.review_imports,
+            )
+        )
+    ):
+        parser.error("Run --candidates, --map or --approve-history separately from other commands")
     if args.review_imports and any(
         (
             args.apply,

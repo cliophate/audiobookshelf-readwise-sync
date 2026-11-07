@@ -8,7 +8,7 @@ The default setup uses your regular Readwise API token, including saving audiobo
 
 This is an early standalone release extracted from a personal reading stats app. The original integration runs daily; this extracted version has automated HTTP tests and a Docker build check. It has not yet had a separate live-account trial. Start with the preview and check a small import before enabling the background worker.
 
-Version 0.1.6 saves audiobook lengths through the public API. No app login or temporary listening session is needed for length setup. Audio range checks, read-only import review and the Finished checks remain in place.
+Version 0.1.7 adds conservative matching, candidate explanations and commands for selecting a book. Newly resolved older sessions wait for an approved history preview. Normal watch logs suppress unchanged details. Audiobook lengths still use the public API with your regular token.
 
 See the [changelog](CHANGELOG.md) for version history and update instructions.
 
@@ -65,7 +65,7 @@ The sync reads the book back to verify the saved length before importing session
 
 For a large ABS library, start with a few books. Set `ABS_ITEM_IDS` in `.env` to their ABS item IDs, separated by commas, or use `IMPORT_SINCE` to limit listening history by date. See [Choose which books to sync](#choose-which-books-to-sync).
 
-It automatically matches a book when exactly one library entry has the same title and author. Capitalization, punctuation and common edition labels are ignored. Different subtitles stay distinct. Use a manual mapping when titles or author credits differ.
+It automatically matches one credible library entry after checking titles, authors and available identifiers. Harmless formatting differences are allowed. Conflicting subtitles, editions, volumes and adaptations stay for review. The preview explains its decisions.
 
 ### 3. Preview
 
@@ -83,6 +83,8 @@ Common statuses:
 | `ready` | Check the match. These sessions can be imported. |
 | `unmatched` | Add the book to Readwise Books or supply a manual mapping. |
 | `ambiguous` | More than one library book matches. Supply a mapping. |
+| `matching_review` | A possible existing book has conflicting or incomplete metadata. Inspect the candidates and choose a mapping if appropriate. |
+| `history_needs_review` | A newly resolved match has older sessions. Review the ranges in `--json`, then approve its saved history preview. |
 | `needs_length` | Use `--apply` to save the ABS duration, or set a valid length in Readwise Books. |
 | `recent` | Wait for the quiet period after listening. |
 | `existing` | This source session has already been imported. |
@@ -95,13 +97,23 @@ Common statuses:
 | `needs_review` | The source is inconsistent, or a previous submission remains unresolved. |
 | `setup_needs_review` | A book or duration setup was interrupted or could not be verified. Check its local journal and Readwise. |
 
-To map a book yourself, list your Readwise library IDs:
+To inspect suggested matches and save your choice:
+
+```sh
+docker compose run --rm sync --candidates ABS_ITEM_ID
+docker compose run --rm sync --map ABS_ITEM_ID READWISE_BOOK_ID
+docker compose run --rm sync --json
+```
+
+These commands use the ABS metadata cached by your last preview. Candidate lookup reads the complete Readwise library and compares the old and new automatic decisions. Mapping verifies that the chosen library entry is active, preserves other mappings, and makes no Readwise changes. It refuses to replace an existing different mapping or imported destination. Split parts and collections need a progress policy before a new mapping can be saved.
+
+You can also list your Readwise library IDs:
 
 ```sh
 docker compose run --rm sync --list-books
 ```
 
-Create `data/mappings.json` with the ABS item ID from the preview and the Readwise **library book ID** from this list:
+Alternatively, edit `data/mappings.json` with the ABS item ID from the preview and the Readwise **library book ID** from this list:
 
 ```json
 {
@@ -109,11 +121,20 @@ Create `data/mappings.json` with the ABS item ID from the preview and the Readwi
 }
 ```
 
-Use the library ID, not the catalog/product ID in a store link. A manual mapping overrides title matching, so check it carefully. Once an item has imported sessions, the sync refuses to move its history to a different book.
+Use the library ID, not the catalog/product ID in a store link. A manual mapping overrides title matching, so check it carefully. New split-part or collection mappings still need a progress policy. Once an item has imported sessions, the sync refuses to move its history to a different book.
+
+If the preview reports `history_needs_review`, inspect the destination, dates and audio ranges in `--json`. Approve that exact preview using its printed token:
+
+```sh
+docker compose run --rm sync --approve-history ABS_ITEM_ID REVIEW_TOKEN
+docker compose run --rm sync --apply
+```
+
+Approval changes only local state. It covers the listed source snapshots and destination, not every past or future session for that book. Changed sources and additional old sessions need another preview. Existing timing, duration and overlap checks still apply after approval. There is no automatic repair or replay of previously exported history.
 
 ### 4. Import once, then run in the background
 
-Check older sessions too. They are included unless you set `IMPORT_SINCE` in `.env`. For a small first import, set a recent cutoff such as `2026-10-01T00:00:00Z`; clearing it later makes older history eligible again.
+Check older sessions too. Initial imports still include ordinary exact matches unless you set `IMPORT_SINCE` in `.env`. Books recognized by the improved matching rules, previously unmatched books, and new mappings saved with `--map` hold older sessions for explicit history approval. For a small first import, set a recent cutoff such as `2026-10-01T00:00:00Z`.
 
 When the preview looks right:
 
@@ -136,13 +157,13 @@ Stop the worker with `docker compose stop sync`. Nothing is deleted from either 
 
 ### NAS and prebuilt images
 
-The [v0.1.6 release](https://github.com/cliophate/audiobookshelf-readwise-sync/releases/tag/v0.1.6) provides tagged Docker image archives for `linux-amd64` and `linux-arm64`. Choose the one matching your NAS. Import it in Container Manager, or load it with Docker:
+The [v0.1.7 release](https://github.com/cliophate/audiobookshelf-readwise-sync/releases/tag/v0.1.7) provides tagged Docker image archives for `linux-amd64` and `linux-arm64`. Choose the one matching your NAS. Import it in Container Manager, or load it with Docker:
 
 ```sh
-docker load --input audiobookshelf-readwise-sync-v0.1.6-linux-amd64.tar.gz
+docker load --input audiobookshelf-readwise-sync-v0.1.7-linux-amd64.tar.gz
 ```
 
-The image is named `audiobookshelf-readwise-sync:0.1.6`. Use the normal configuration above, with the image override:
+The image is named `audiobookshelf-readwise-sync:0.1.7`. Use the normal configuration above, with the image override:
 
 ```sh
 docker compose -f compose.yaml -f compose.image.yaml run --rm sync --json
@@ -161,6 +182,8 @@ docker compose run --rm sync --issues
 ```
 
 This reads the local review journal without contacting either service. `needs_review`, `missing_abs_item` and duration mismatch records retain their original source data in `source_issues`. The command lists IDs, reasons and observation dates. If a source becomes usable again, its issue is marked resolved; its journal row is retained. Export ledgers and checkpoints are never deleted to clear an error.
+
+Ordinary logs show actionable sessions, candidate explanations and shelf changes. They omit routine existing sessions and unchanged shelves. Watch mode prints unresolved counts on every poll and repeats full entries only when they change, including across restarts. Use `--show-all` to repeat them, or `--json` for all current session details. A one-off preview always prints its current attention entries.
 
 An item-specific 404 can be skipped. A 404, authentication failure, network failure or invalid response on a required account/session endpoint still stops the run. Error messages identify the endpoint path without printing tokens, full URLs or response bodies.
 
@@ -210,9 +233,15 @@ Shelf writes are journaled before sending and verified by reading the book back.
 
 ## Book matching
 
-Matching uses the ABS primary title and author. A separate subtitle is retained in the preview instead of being appended to the title. Readwise titles with an added subtitle can match that primary title. Series details are retained as supporting metadata; conflicting known book or part numbers block a match.
+Matching compares the primary title, author set, subtitle and available series, volume, edition and adaptation information. It handles leading articles, accents, punctuation, apostrophes, author ordering, initial spacing and recognized academic credentials. Contributor roles are respected when supplied; narrator or foreword credits do not become primary authors. It does not infer missing author roles or expand initials into guessed names.
 
-The sync does not collapse two different colon titles to their shared prefix, choose between multiple matching editions, or guess from a title alone. Multiple matches stay `ambiguous` for explicit mapping. Catalog ambiguities discovered during optional setup are also reported for review. Existing ledger bindings and explicit mappings take precedence, so a matching change cannot move previously imported history to another book.
+A subtitle can be separate, after a colon or in parentheses. If both records supply meaningful subtitles, they must agree. Without an exact identifier, an embedded title suffix cannot be dropped to match an entry that lacks it. This keeps a title such as Dune: Messiah from matching Dune. Missing volume or edition information goes to review. Bare trailing volume numbers and labelled Arabic or Roman numbers are compared separately from audio-part numbers. Split parts, collections and adaptations are never silently equated with an unsplit standard book.
+
+Valid ISBN and ASIN values are retained from ABS and the public Readwise product metadata. An exact identifier supports a match, including differently recorded names, but cannot override conflicting volumes, subtitles, editions or adaptation metadata. Different identifiers require review because ebook and audiobook editions often differ. `--list-books` now preserves product metadata for offline investigation.
+
+The full paginated library is checked before optional catalog creation. A unique acceptable entry is selected only when there are no competing plausible entries. Fuzzy title comparisons suggest candidates for review and never choose a destination. Ordinary logs explain rejected and uncertain candidates; `--candidates ABS_ITEM_ID` shows the complete candidate list. If a plausible existing entry needs review, automatic creation is blocked.
+
+Existing ledger bindings and explicit mappings take precedence. They are not rewritten by new matching rules, and confirmed exports are not repeated even if their remote sessions were deleted. Newly recognized old sessions need a saved preview approval. New listening after that book's review boundary can still sync while older sessions remain held. Keep the existing data directory when upgrading; the new review tables are added without replacing exports, checkpoints or source records.
 
 ## Optional automatic book setup
 

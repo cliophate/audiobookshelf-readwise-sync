@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.1.7 - 2026-11-07
+
+### Fixed
+
+- Matching preserves meaningful subtitles, numbered editions, book volumes, audio parts and adaptations. Conflicting or incomplete metadata stays for review instead of sending progress to a guessed destination.
+- Title and author normalization handles leading articles, apostrophes, accents, author order, initial spacing and recognized academic credentials. Subtitles can be stored separately or embedded in titles. Available ISBN/ASIN fields are retained and checked, with ISBN-10/13 normalization and format validation.
+- A plausible existing library entry blocks automatic creation of another book. Multiple possible entries stay ambiguous even when one passes the automatic checks.
+
+### Added
+
+- `--candidates ABS_ITEM_ID` explains library candidates. `--map ABS_ITEM_ID READWISE_BOOK_ID` verifies the target and saves a mapping while preserving other mappings and saved destinations. Neither command writes to Readwise.
+- Newly recognized or previously unmatched old sessions require a saved history preview and explicit `--approve-history ABS_ITEM_ID REVIEW_TOKEN` before import. Approval covers exact source snapshots and one destination. Changed observations and additional old sources remain held. Existing exports, checkpoints and account bindings are preserved; no historical records are repaired or replayed.
+- Normal logs show actionable entries, matching explanations and overlap IDs. Watch logs retain unresolved counts but deduplicate unchanged explanations across polls and restarts. `--show-all` repeats them; `--json` retains full detail.
+- Regression fixtures cover all 32 reported candidate pairs, plus unsafe subtitle/edition matches, identifiers, contributor roles, historical approvals, saved destinations and log deduplication.
+
 ## 0.1.6 - 2026-11-03
 
 ### Changed

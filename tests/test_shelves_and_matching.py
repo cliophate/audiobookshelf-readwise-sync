@@ -32,8 +32,27 @@ class MatchingTests(unittest.TestCase):
         self.assertEqual(metadata["title"], "The Example")
         self.assertEqual(metadata["subtitle"], "A Long Description")
         self.assertEqual(metadata["series"], [{"name": "A Series", "sequence": "1"}])
-        for title in ("The Example", "The Example: A Different Description"):
-            self.assertTrue(same_work(metadata, {"title": title, "author": "Ada Example"}))
+        self.assertTrue(
+            same_work(
+                metadata,
+                {
+                    "title": "The Example: A Long Description",
+                    "author": "Ada Example",
+                    "series": [{"name": "A Series", "sequence": "1"}],
+                },
+            )
+        )
+        self.assertFalse(
+            same_work(
+                metadata,
+                {
+                    "title": "The Example: A Different Description",
+                    "author": "Ada Example",
+                    "series": [{"name": "A Series", "sequence": "1"}],
+                },
+            )
+        )
+        self.assertFalse(same_work(metadata, {"title": "The Example", "author": "Ada Example"}))
 
     def test_author_and_meaningful_title_numbers_still_have_to_agree(self):
         book = {"title": "The Example 2", "author": "Ada Example"}

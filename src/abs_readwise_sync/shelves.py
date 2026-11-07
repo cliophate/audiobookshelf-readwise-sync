@@ -44,6 +44,7 @@ def annotate(con, plans, bundle, books):
         plan["shelf"] = shelf
         if plan["status"] in (
             "ambiguous",
+            "matching_review",
             "mapping_changed",
             "book_unavailable",
             "setup_needs_review",
@@ -64,6 +65,11 @@ def annotate(con, plans, bundle, books):
             )
         except ValueError as exc:
             shelf["reason"] = str(exc)
+            continue
+        if plan.get("history_review"):
+            shelf["reason"] = (
+                "Review and approve the newly matched history before changing this book's shelf."
+            )
             continue
         pending = con.execute(
             "select 1 from shelf_attempts where item_id=? and status!='confirmed'",

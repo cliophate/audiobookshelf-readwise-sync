@@ -1,7 +1,7 @@
 """Optional automation through the Readwise Books app API."""
 
 from .config import SyncError
-from .matching import same_work
+from .matching import catalog_candidates, same_work
 
 
 async def add_book(con, api, app, item_id, source):
@@ -10,10 +10,11 @@ async def add_book(con, api, app, item_id, source):
     products = await app.request("GET", "/search_products", params={"q": source["title"]})
     if not isinstance(products, list):
         raise SyncError("Readwise catalog search returned an invalid response.")
-    matches = [p for p in products if isinstance(p, dict) and same_work(source, p)]
-    if len(matches) != 1:
-        return None, "ambiguous" if matches else "unmatched"
-    pid = str(matches[0]["id"])
+    candidates = catalog_candidates(source, [p for p in products if isinstance(p, dict)])
+    plausible = [c for c in candidates if c["status"] in ("ready", "review")]
+    if len(plausible) != 1 or plausible[0]["status"] != "ready":
+        return None, "ambiguous" if plausible else "unmatched"
+    pid = plausible[0]["id"]
     with con:
         con.execute("insert into setup_attempts values(?,?)", (item_id, "pending"))
     data = await api.request(

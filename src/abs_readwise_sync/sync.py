@@ -7,13 +7,14 @@ from datetime import datetime, timezone
 
 import httpx
 
-from . import exporter, optional, shelves
+from . import exporter, history, optional, shelves
 from .clients import ABSClient, AppClient, BooksClient
 from .config import SyncError
 from .durations import saved_audio_length
 from .audio_safety import SuspectAudioRange
 from .public_lengths import DurationSetupError, ensure_length
-from .matching import item_metadata, same_work
+from .matching import catalog_candidates, item_metadata, requires_progress_policy
+from .legacy_matching import same_work as legacy_same_work
 from .storage import bind_identity, cache_bundle, database
 from .audio_sources import fit_audio_endpoint, save_issue, resolve_issue, source_issue
 
@@ -29,20 +30,78 @@ def positive_length(value):
 
 
 def resolve_book(con, item_id, metadata, books, mappings):
+    return resolve_match(con, item_id, metadata, books, mappings)[:2]
+
+
+def resolve_match(con, item_id, metadata, books, mappings):
     saved = con.execute("select book_id from books where work=?", (item_id,)).fetchone()
     requested = mappings.get(item_id)
     if saved and requested and saved[0] != requested:
-        return None, "mapping_changed"
+        return (
+            None,
+            "mapping_changed",
+            {
+                "reason": f"Saved destination {saved[0]} differs from requested {requested}. Existing exports stay with {saved[0]}.",
+                "candidates": [],
+            },
+        )
     bid = requested or (saved[0] if saved else None)
     if bid:
         matches = [b for b in books if str(b["id"]) == bid and b.get("status") != "deleted"]
-        return (matches[0], "matched") if len(matches) == 1 else (None, "book_unavailable")
-    matches = [b for b in books if b.get("status") != "deleted" and same_work(metadata, b)]
-    if len(matches) == 1:
-        return matches[0], "matched"
-    if not matches and any(b.get("status") == "deleted" and same_work(metadata, b) for b in books):
-        return None, "book_unavailable"
-    return None, "ambiguous" if matches else "unmatched"
+        if not saved and len(matches) == 1 and requires_progress_policy(metadata, matches[0]):
+            return (
+                None,
+                "matching_review",
+                {
+                    "reason": f"Manual target {bid} cannot receive split or collection positions without an explicit progress policy. The mapping is preserved.",
+                    "candidates": catalog_candidates(metadata, matches),
+                },
+            )
+        reason = (
+            f"Using {'manual mapping' if requested else 'saved binding'} to Readwise {bid}."
+            if matches
+            else f"Mapped Readwise book {bid} is missing or deleted. Existing exports remain recorded."
+        )
+        return (
+            (matches[0], "matched", {"reason": reason, "candidates": []})
+            if len(matches) == 1
+            else (None, "book_unavailable", {"reason": reason, "candidates": []})
+        )
+    candidates = catalog_candidates(metadata, books)
+    credible = [c for c in candidates if c["status"] in ("ready", "review")]
+    accepted = [c for c in credible if c["status"] == "ready"]
+    detail = {"candidates": candidates[:10], "candidate_count": len(candidates)}
+    previous = [
+        str(b["id"])
+        for b in books
+        if b.get("status") != "deleted" and legacy_same_work(metadata, b)
+    ]
+    detail["previous_status"] = (
+        "matched" if len(previous) == 1 else "ambiguous" if previous else "unmatched"
+    )
+    detail["previous_readwise_book_ids"] = previous
+    if len(credible) == 1 and len(accepted) == 1:
+        detail["reason"] = accepted[0]["reasons"][0]
+        return next(b for b in books if str(b["id"]) == accepted[0]["id"]), "matched", detail
+    if len(credible) > 1:
+        detail["reason"] = "Multiple possible library entries need a manual choice."
+        return None, "ambiguous", detail
+    if credible:
+        detail["reason"] = (
+            "A possible existing library entry needs review. No new book will be created."
+        )
+        return None, "matching_review", detail
+    if any(c["status"] == "deleted" and c["plausible"] for c in candidates):
+        detail["reason"] = (
+            "A related library entry is deleted. It will not be restored automatically."
+        )
+        return None, "book_unavailable", detail
+    detail["reason"] = (
+        "No plausible existing library entry was found."
+        if not candidates
+        else "Related titles were rejected because their metadata conflicts."
+    )
+    return None, "unmatched", detail
 
 
 def overlaps(item, sessions):
@@ -114,9 +173,12 @@ def build_plan(con, settings, bundle, books, sessions, now=None):
                 "duration": first_source.get("duration"),
             }
         )
-        book, state = resolve_book(con, item_id, metadata, books, mappings)
+        book, state, matching = resolve_match(con, item_id, metadata, books, mappings)
         if state == "unmatched" and item_id in bundle.get("ambiguous_catalog", []):
             state = "ambiguous"
+            matching["reason"] = (
+                "Optional catalog search found uncertain or multiple entries. Add the correct book manually and map its library ID."
+            )
         length = saved_audio_length((book or {}).get("manual_total_seconds"))
         source_length = positive_length(metadata["duration"])
         if book and not length:
@@ -146,7 +208,10 @@ def build_plan(con, settings, bundle, books, sessions, now=None):
             "abs_length_seconds": source_length,
             "readwise_length_seconds": length,
             "sessions": [],
+            "matching": matching,
         }
+        cutoff = history.boundary(con, item_id, book, metadata, now) if book else None
+        held_sources = []
         if state == "needs_length":
             if item_id in bundle.get("setup_notes", {}):
                 reason = bundle["setup_notes"][item_id]
@@ -163,6 +228,14 @@ def build_plan(con, settings, bundle, books, sessions, now=None):
             plan["length_help"] = reason
         for source in sorted(sources, key=lambda s: float(s.get("startedAt") or 0)):
             row = {"source_id": source["id"], "status": state}
+            if state in (
+                "unmatched",
+                "ambiguous",
+                "matching_review",
+                "mapping_changed",
+                "book_unavailable",
+            ):
+                row["reason"] = matching["reason"]
             if state == "needs_length":
                 row["reason"] = plan["length_help"]
             if state == "missing_abs_item":
@@ -224,12 +297,29 @@ def build_plan(con, settings, bundle, books, sessions, now=None):
                         )
                         if adjusted:
                             row["endpoint_adjusted"] = True
-                        if not length:
+                        if history.held(con, item_id, book["id"], source, cutoff):
+                            row["status"] = "history_needs_review"
+                            row["reason"] = (
+                                "Older sessions need an approved history preview before import."
+                            )
+                            held_sources.append(source)
+                        elif not length:
                             row["status"] = "needs_length"
                         elif item["seconds_at_end"] > length:
                             row["status"] = "position_exceeds_length"
                         elif overlaps(item, occupied):
                             row["status"] = "remote_overlap"
+                            conflicts = [s for s in occupied if overlaps(item, [s])]
+                            row["reason"] = (
+                                "Audio interval overlaps "
+                                + ", ".join(
+                                    f"Readwise session {s['id']}"
+                                    if s.get("id") is not None
+                                    else "another planned source session"
+                                    for s in conflicts
+                                )
+                                + ". Review the existing ranges before importing."
+                            )
                         else:
                             row["status"] = "ready"
                             row["_candidate"] = candidate
@@ -242,6 +332,8 @@ def build_plan(con, settings, bundle, books, sessions, now=None):
                 row["reason"] = "Source timing, identity, or previous submission needs review."
             plan["sessions"].append(row)
         plans.append(plan)
+        if held_sources:
+            plan["history_review"] = history.preview(con, item_id, book["id"], held_sources)
     if settings.sync_shelves:
         shelves.annotate(con, plans, bundle, books)
     return plans

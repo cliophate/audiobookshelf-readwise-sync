@@ -1,0 +1,467 @@
+[
+  {
+    "source": {
+      "title": "48 Laws of Power",
+      "author": "Robert Greene",
+      "subtitle": null
+    },
+    "candidates": [
+      {
+        "id": 1001,
+        "title": "The 48 Laws of Power",
+        "author": "Robert Greene",
+        "status": "want_to_read"
+      }
+    ]
+  },
+  {
+    "source": {
+      "title": "A Court of Silver Flames (2 of 2) (Dramatized Adaptation)",
+      "author": "Sarah J. Maas",
+      "subtitle": "A Court of Thorns and Roses, Book 5",
+      "series": [
+        {
+          "name": "A Court of Thorns and Roses",
+          "sequence": "5"
+        }
+      ]
+    },
+    "candidates": [
+      {
+        "id": 1002,
+        "title": "A Court of Silver Flames",
+        "author": "Sarah J. Maas",
+        "status": "want_to_read"
+      }
+    ]
+  },
+  {
+    "source": {
+      "title": "A Court of Thorns and Roses (Part 2 of 2) (Dramatized Adaptation)",
+      "author": "Sarah J. Maas",
+      "subtitle": "A Court of Thorns and Roses, Book 1",
+      "series": [
+        {
+          "name": "A Court of Thorns and Roses",
+          "sequence": "1"
+        }
+      ]
+    },
+    "candidates": [
+      {
+        "id": 1003,
+        "title": "A Court of Thorns and Roses",
+        "author": "Sarah J. Maas",
+        "status": "want_to_read"
+      }
+    ]
+  },
+  {
+    "source": {
+      "title": "Above All Things",
+      "author": "Roslyn Sinclair",
+      "subtitle": "Carlisle Series, Book 2",
+      "series": [
+        {
+          "name": "The Carlisle Series",
+          "sequence": "2"
+        }
+      ]
+    },
+    "candidates": [
+      {
+        "id": 1004,
+        "title": "Above All Things (The Carlisle Series Book 2)",
+        "author": "Roslyn Sinclair",
+        "status": "want_to_read"
+      }
+    ]
+  },
+  {
+    "source": {
+      "title": "Adachi and Shimamura (Light Novel) Vol. 2",
+      "author": "Hitoma Iruma",
+      "subtitle": null,
+      "series": [
+        {
+          "name": "Adachi and Shimamura",
+          "sequence": "2"
+        }
+      ]
+    },
+    "candidates": [
+      {
+        "id": 1005,
+        "title": "Adachi and Shimamura (Light Novel) Vol. 3",
+        "author": "Iruma, Hitoma",
+        "status": "want_to_read"
+      },
+      {
+        "id": 1006,
+        "title": "Adachi and Shimamura (Light Novel) Vol. 1",
+        "author": "Hitoma Iruma",
+        "status": "want_to_read"
+      }
+    ]
+  },
+  {
+    "source": {
+      "title": "Adachi and Shimamura, Vol. 4",
+      "author": "Hitoma Iruma",
+      "subtitle": "Light Novel",
+      "series": [
+        {
+          "name": "Adachi and Shimamura",
+          "sequence": "4"
+        }
+      ]
+    },
+    "candidates": [
+      {
+        "id": 1005,
+        "title": "Adachi and Shimamura (Light Novel) Vol. 3",
+        "author": "Iruma, Hitoma",
+        "status": "want_to_read"
+      },
+      {
+        "id": 1006,
+        "title": "Adachi and Shimamura (Light Novel) Vol. 1",
+        "author": "Hitoma Iruma",
+        "status": "want_to_read"
+      }
+    ]
+  },
+  {
+    "source": {
+      "title": "All the Skills 4: A Deck-Building LitRPG (Unabridged)",
+      "author": "Honour Rae",
+      "subtitle": "All the Skills, Book 4",
+      "series": [
+        {
+          "name": "All the Skills",
+          "sequence": "4"
+        }
+      ]
+    },
+    "candidates": [
+      {
+        "id": 1007,
+        "title": "All the Skills 2",
+        "author": "Honour Rae",
+        "status": "want_to_read"
+      },
+      {
+        "id": 1008,
+        "title": "All the Skills 3",
+        "author": "Honour Rae",
+        "status": "want_to_read"
+      },
+      {
+        "id": 1009,
+        "title": "All the Skills 4",
+        "author": "Honour Rae",
+        "status": "want_to_read"
+      },
+      {
+        "id": 1010,
+        "title": "All the Skills",
+        "author": "Honour Rae",
+        "status": "want_to_read"
+      },
+      {
+        "id": 1011,
+        "title": "All The Skills 3: A Deckbuilding LitRPG",
+        "author": "Honour Rae",
+        "status": "want_to_read"
+      },
+      {
+        "id": 1012,
+        "title": "All The Skills - Book 4",
+        "author": "Honour Rae",
+        "status": "want_to_read"
+      },
+      {
+        "id": 1013,
+        "title": "All The Skills: Book 5: A Deck-Building LitRPG",
+        "author": "Honour Rae",
+        "status": "want_to_read"
+      }
+    ]
+  },
+  {
+    "source": {
+      "title": "Barging In",
+      "author": "Emily Banting",
+      "subtitle": "A Sapphic Age Gap Romance"
+    },
+    "candidates": [
+      {
+        "id": 1014,
+        "title": "Barging In (A Sapphic Age Gap Romance)",
+        "author": "Emily Banting",
+        "status": "want_to_read"
+      }
+    ]
+  },
+  {
+    "source": {
+      "title": "Basic Economics, Fifth Edition: A Common Sense Guide to the Economy",
+      "author": "Thomas Sowell",
+      "subtitle": "A Common Sense Guide to the Economy"
+    },
+    "candidates": [
+      {
+        "id": 1015,
+        "title": "Basic Economics",
+        "author": "Thomas Sowell",
+        "status": "want_to_read"
+      }
+    ]
+  },
+  {
+    "source": {
+      "title": "Defiance of the Fall 17",
+      "author": "TheFirstDefier, JF Brink",
+      "subtitle": "A LitRPG Adventure",
+      "series": [
+        {
+          "name": "Defiance of the Fall",
+          "sequence": "17"
+        }
+      ]
+    },
+    "candidates": [
+      {
+        "id": 1016,
+        "title": "Defiance of the Fall 2: A LitRPG Adventure",
+        "author": "TheFirstDefier",
+        "status": "want_to_read"
+      },
+      {
+        "id": 1017,
+        "title": "Defiance of the Fall: A LitRPG Adventure",
+        "author": "TheFirstDefier",
+        "status": "want_to_read"
+      }
+    ]
+  },
+  {
+    "source": {
+      "title": "Economics for Dummies, 3rd Edition (Unabridged)",
+      "author": "Sean Masaki Flynn, PhD",
+      "subtitle": null
+    },
+    "candidates": [
+      {
+        "id": 1018,
+        "title": "Economics For Dummies",
+        "author": "Sean Masaki Flynn",
+        "status": "want_to_read"
+      }
+    ]
+  },
+  {
+    "source": {
+      "title": "Fourth Wing (Part 1 of 2) (Dramatized Adaptation)",
+      "author": "Rebecca Yarros",
+      "subtitle": "The Empyrean, Book 1",
+      "series": [
+        {
+          "name": "The Empyrean",
+          "sequence": "1"
+        }
+      ]
+    },
+    "candidates": [
+      {
+        "id": 1019,
+        "title": "Fourth Wing",
+        "author": "Rebecca Yarros",
+        "status": "want_to_read"
+      }
+    ]
+  },
+  {
+    "source": {
+      "title": "Fourth Wing (Part 2 of 2) (Dramatized Adaptation)",
+      "author": "Rebecca Yarros",
+      "subtitle": "The Empyrean, Book 1",
+      "series": [
+        {
+          "name": "The Empyrean",
+          "sequence": "1"
+        }
+      ]
+    },
+    "candidates": [
+      {
+        "id": 1019,
+        "title": "Fourth Wing",
+        "author": "Rebecca Yarros",
+        "status": "want_to_read"
+      }
+    ]
+  },
+  {
+    "source": {
+      "title": "He Who Fights with Monsters 13: A LitRPG Adventure",
+      "author": "Shirtaloon, Travis Deverell",
+      "subtitle": "He Who Fights with Monsters, Book 13",
+      "series": [
+        {
+          "name": "He Who Fights with Monsters",
+          "sequence": "13"
+        }
+      ]
+    },
+    "candidates": [
+      {
+        "id": 1020,
+        "title": "He Who Fights with Monsters, Book 1",
+        "author": "Shirtaloon, Travis Deverell",
+        "status": "want_to_read"
+      }
+    ]
+  },
+  {
+    "source": {
+      "title": "House of Sky and Breath (Part 1 of 2) (Dramatized Adaptation)",
+      "author": "Sarah J. Maas",
+      "subtitle": "Crescent City, Book 2",
+      "series": [
+        {
+          "name": "Crescent City",
+          "sequence": "2"
+        }
+      ]
+    },
+    "candidates": [
+      {
+        "id": 1021,
+        "title": "House of Sky and Breath",
+        "author": "Sarah J. Maas",
+        "status": "want_to_read"
+      }
+    ]
+  },
+  {
+    "source": {
+      "title": "Hunter’s Way",
+      "author": "Gerri Hill",
+      "subtitle": "Hunter Series, Book 1",
+      "series": [
+        {
+          "name": "Hunter",
+          "sequence": "1"
+        }
+      ]
+    },
+    "candidates": [
+      {
+        "id": 1022,
+        "title": "Hunter's Way",
+        "author": "Gerri Hill",
+        "status": "want_to_read"
+      }
+    ]
+  },
+  {
+    "source": {
+      "title": "Protocols",
+      "author": "Andrew D. Huberman Ph.D.",
+      "subtitle": "An Operating Manual for the Human Body"
+    },
+    "candidates": [
+      {
+        "id": 1023,
+        "title": "Protocols",
+        "author": "Andrew D. Huberman",
+        "status": "want_to_read"
+      }
+    ]
+  },
+  {
+    "source": {
+      "title": "The Primal Hunter (Unabridged)",
+      "author": "Zogarth",
+      "subtitle": "A LitRPG Adventure",
+      "series": [
+        {
+          "name": "The Primal Hunter",
+          "sequence": "1"
+        }
+      ]
+    },
+    "candidates": [
+      {
+        "id": 1024,
+        "title": "The Primal Hunter 2: A LitRPG Adventure",
+        "author": "Zogarth",
+        "status": "want_to_read"
+      },
+      {
+        "id": 1025,
+        "title": "The Primal Hunter 3: A LitRPG Adventure",
+        "author": "Zogarth",
+        "status": "want_to_read"
+      }
+    ]
+  },
+  {
+    "source": {
+      "title": "The Primal Hunter 1 - 100",
+      "author": "Zogarth",
+      "subtitle": "[Full Cast] Dramatized Adaptation"
+    },
+    "candidates": [
+      {
+        "id": 1024,
+        "title": "The Primal Hunter 2: A LitRPG Adventure",
+        "author": "Zogarth",
+        "status": "want_to_read"
+      },
+      {
+        "id": 1025,
+        "title": "The Primal Hunter 3: A LitRPG Adventure",
+        "author": "Zogarth",
+        "status": "want_to_read"
+      }
+    ]
+  },
+  {
+    "source": {
+      "title": "Threshing Day [Dramatized Adaptation]",
+      "author": "Rebecca Yarros",
+      "subtitle": "The Empyrean",
+      "series": [
+        {
+          "name": "The Empyrean",
+          "sequence": "3.5"
+        }
+      ]
+    },
+    "candidates": [
+      {
+        "id": 1026,
+        "title": "Threshing Day (Wing and Claw Collection)",
+        "author": "Rebecca Yarros",
+        "status": "want_to_read"
+      }
+    ]
+  },
+  {
+    "source": {
+      "title": "Verbal Judo, Updated Edition",
+      "author": "Jerry B. Jenkins, Lee Fjelstad - foreword, Pam Thompson - foreword, George J. Thompson PhD",
+      "subtitle": "The Gentle Art of Persuasion"
+    },
+    "candidates": [
+      {
+        "id": 1027,
+        "title": "Verbal Judo: The Five Universal Truths Of Human Interaction",
+        "author": "Mike \"Ziggy\" Siegfried, Jason Brick",
+        "status": "want_to_read"
+      }
+    ]
+  }
+]
