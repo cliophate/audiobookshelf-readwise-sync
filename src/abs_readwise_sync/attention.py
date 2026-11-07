@@ -55,9 +55,8 @@ def render(result, previous=None, *, show_all=False):
         ):
             lines.append("    Match: " + matching.get("reason", book["status"]))
             for candidate in matching.get("candidates", []):
-                volumes = ", ".join(candidate["volumes"]) or "unknown"
                 lines.append(
-                    f"    Candidate {candidate['id']}: {candidate['title']} / {candidate['author']} | volume {volumes} | {candidate['status']}. "
+                    f"    Candidate {candidate['id']}: {candidate['title']} / {candidate['author']} | {candidate['status']}. "
                     + " ".join(candidate["reasons"])
                 )
             if matching.get("candidate_count", 0) > len(matching.get("candidates", [])):

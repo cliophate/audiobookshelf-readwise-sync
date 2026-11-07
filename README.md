@@ -8,7 +8,7 @@ The default setup uses your regular Readwise API token, including saving audiobo
 
 This is an early standalone release extracted from a personal reading stats app. The original integration runs daily; this extracted version has automated HTTP tests and a Docker build check. It has not yet had a separate live-account trial. Start with the preview and check a small import before enabling the background worker.
 
-Version 0.1.7 adds conservative matching, candidate explanations and commands for selecting a book. Newly resolved older sessions wait for an approved history preview. Normal watch logs suppress unchanged details. Audiobook lengths still use the public API with your regular token.
+Version 0.1.8 treats different audiobook and print ISBNs/ASINs as neutral. Candidate explanations show which ABS or Readwise fields supply installment numbers. Newly resolved older sessions wait for an approved history preview. Normal watch logs suppress unchanged details. Audiobook lengths still use the public API with your regular token.
 
 See the [changelog](CHANGELOG.md) for version history and update instructions.
 
@@ -157,13 +157,13 @@ Stop the worker with `docker compose stop sync`. Nothing is deleted from either 
 
 ### NAS and prebuilt images
 
-The [v0.1.7 release](https://github.com/cliophate/audiobookshelf-readwise-sync/releases/tag/v0.1.7) provides tagged Docker image archives for `linux-amd64` and `linux-arm64`. Choose the one matching your NAS. Import it in Container Manager, or load it with Docker:
+The [v0.1.8 release](https://github.com/cliophate/audiobookshelf-readwise-sync/releases/tag/v0.1.8) provides tagged Docker image archives for `linux-amd64` and `linux-arm64`. Choose the one matching your NAS. Import it in Container Manager, or load it with Docker:
 
 ```sh
-docker load --input audiobookshelf-readwise-sync-v0.1.7-linux-amd64.tar.gz
+docker load --input audiobookshelf-readwise-sync-v0.1.8-linux-amd64.tar.gz
 ```
 
-The image is named `audiobookshelf-readwise-sync:0.1.7`. Use the normal configuration above, with the image override:
+The image is named `audiobookshelf-readwise-sync:0.1.8`. Use the normal configuration above, with the image override:
 
 ```sh
 docker compose -f compose.yaml -f compose.image.yaml run --rm sync --json
@@ -235,9 +235,9 @@ Shelf writes are journaled before sending and verified by reading the book back.
 
 Matching compares the primary title, author set, subtitle and available series, volume, edition and adaptation information. It handles leading articles, accents, punctuation, apostrophes, author ordering, initial spacing and recognized academic credentials. Contributor roles are respected when supplied; narrator or foreword credits do not become primary authors. It does not infer missing author roles or expand initials into guessed names.
 
-A subtitle can be separate, after a colon or in parentheses. If both records supply meaningful subtitles, they must agree. Without an exact identifier, an embedded title suffix cannot be dropped to match an entry that lacks it. This keeps a title such as Dune: Messiah from matching Dune. Missing volume or edition information goes to review. Bare trailing volume numbers and labelled Arabic or Roman numbers are compared separately from audio-part numbers. Split parts, collections and adaptations are never silently equated with an unsplit standard book.
+A subtitle can be separate, after a colon or in parentheses. If both records supply meaningful subtitles, they must agree. Without an exact identifier, an embedded title suffix cannot be dropped to match an entry that lacks it. This keeps a title such as Dune: Messiah from matching Dune. A book or series number supplied on only one side goes to review. No number on either side is not a conflict. Explicitly different numbers are rejected. Candidate output identifies each number as a series installment, an explicit volume or an otherwise unclassified trailing title number, and shows its source field. Publication editions and audio parts remain separate checks. Split parts, collections and adaptations are never silently equated with an unsplit standard book.
 
-Valid ISBN and ASIN values are retained from ABS and the public Readwise product metadata. An exact identifier supports a match, including differently recorded names, but cannot override conflicting volumes, subtitles, editions or adaptation metadata. Different identifiers require review because ebook and audiobook editions often differ. `--list-books` now preserves product metadata for offline investigation.
+Valid ISBN and ASIN values are retained from ABS and the public Readwise product metadata. An exact identifier supports a match, including differently recorded names, but cannot override conflicting volumes, subtitles, editions or adaptation metadata. Different identifiers are neutral because audiobook, print and ebook identifiers often differ for the same work. Readwise also resolves edition identifiers to the canonical ebook, as described in the [public API documentation](https://readwise.io/books_api). A mismatch alone never blocks a match. It does not establish that the editions contain identical content. Meaningful subtitle, installment, edition, adaptation, split-book and collection differences still need review. Multiple plausible entries still block automatic selection. `--list-books` now preserves product metadata for offline investigation.
 
 The full paginated library is checked before optional catalog creation. A unique acceptable entry is selected only when there are no competing plausible entries. Fuzzy title comparisons suggest candidates for review and never choose a destination. Ordinary logs explain rejected and uncertain candidates; `--candidates ABS_ITEM_ID` shows the complete candidate list. If a plausible existing entry needs review, automatic creation is blocked.
 

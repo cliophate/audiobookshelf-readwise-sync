@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.8 - 2026-11-07
+
+### Fixed
+
+- Different ISBNs or ASINs no longer block a work match. Audiobook and print or ebook editions commonly use different identifiers. Exact valid identifiers remain strong evidence, subject to the existing content and structure checks.
+- Candidate inspection identifies series installments, explicit volumes and unclassified title numbers, with the source field on each side. Missing-number and conflict explanations show the actual ABS and Readwise evidence. No number on either side is not a conflict.
+- Ambiguous entries, conflicting installments, meaningful subtitles, changed content editions, split books, adaptations and collections retain their review checks. Manual mapping still does not approve history. Existing destinations, exports and checkpoints remain unchanged.
+
+### Tests
+
+- Added cross-format regressions from the reported examples, identifier-independent content checks, Hunter's Way metadata explanations, number types and a history hold for a previously blocked ISBN match.
+
 ## 0.1.7 - 2026-11-07
 
 ### Fixed

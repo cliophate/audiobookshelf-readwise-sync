@@ -59,7 +59,7 @@ class MatcherTests(unittest.TestCase):
         )
         self.assertTrue(
             all(
-                "Book volume numbers conflict." in c["reasons"]
+                "Book or series numbers conflict." in c["reasons"]
                 for c in candidates
                 if c["status"] == "rejected"
             )
@@ -162,7 +162,7 @@ class MatcherTests(unittest.TestCase):
         self.assertFalse(
             same_work(book("Example 1", asin="B012345678"), book("Example 2", asin="B012345678"))
         )
-        self.assertFalse(
+        self.assertTrue(
             same_work(
                 book("Example", isbn="9780306406157", asin="B012345678"),
                 book("Example", isbn="9780306406157", asin="B087654321"),
@@ -177,6 +177,95 @@ class MatcherTests(unittest.TestCase):
         )
         self.assertEqual(data["isbn"], "9780306406157")
         self.assertEqual(data["asin"], "B012345678")
+
+    def test_cross_format_identifiers_are_neutral_for_reported_work_matches(self):
+        rows = json.loads((Path(__file__).parent / "fixtures/matching_examples.json").read_text())
+        examples = {
+            "48 Laws of Power": ("9781622318643", "9780140280197"),
+            "Above All Things": ("9798765028285", "9798992529753"),
+            "Barging In": ("9780306406157", "9781915157218"),
+            "Protocols": ("9781797182919", "9781668032152"),
+        }
+        for row in rows:
+            if row["source"]["title"] not in examples:
+                continue
+            source_isbn, target_isbn = examples[row["source"]["title"]]
+            a = {**row["source"], "isbn": source_isbn, "asin": "B012345678"}
+            b = {**row["candidates"][0], "product": {"isbn": target_isbn, "asin": "B087654321"}}
+            with self.subTest(title=a["title"]):
+                result = compare(a, b)
+                self.assertTrue(result["eligible"], result)
+                self.assertEqual(result["reasons"], [])
+                self.assertEqual(
+                    result["identifier_evidence"],
+                    {"isbn": "different_neutral", "asin": "different_neutral"},
+                )
+
+    def test_identifier_differences_do_not_hide_real_content_conflicts(self):
+        for a, b in [
+            ("Example Book 13", "Example Book 1"),
+            ("Example: Biology", "Example: Astronomy"),
+            ("Example (Part 1 of 2)", "Example"),
+            ("Example (Dramatized Adaptation)", "Example"),
+            ("Example (2nd Edition)", "Example (3rd Edition)"),
+            ("Example Collection", "Example"),
+        ]:
+            for same_id in (False, True):
+                with self.subTest(a=a, same_id=same_id):
+                    result = compare(
+                        book(a, asin="B012345678"),
+                        book(b, asin="B012345678" if same_id else "B087654321"),
+                    )
+                    self.assertFalse(result["eligible"])
+                    self.assertTrue(result["reasons"])
+
+    def test_hunters_way_review_explains_actual_source_fields(self):
+        a = book(
+            "Hunter’s Way",
+            "Gerri Hill",
+            subtitle="Hunter Series, Book 1",
+            series=[{"name": "Hunter", "sequence": "1"}],
+            isbn="9780306406157",
+        )
+        b = book("Hunter's Way", "Gerri Hill", isbn="9781594930188")
+        candidate = catalog_candidates(a, [b])[0]
+        self.assertEqual(candidate["status"], "review")
+        reason = " ".join(candidate["reasons"])
+        self.assertIn('ABS supplies installment 1 from subtitle "Hunter Series, Book 1"', reason)
+        self.assertIn("series[0].sequence", reason)
+        self.assertIn("Readwise supplies no book or series number.", reason)
+        self.assertEqual(
+            {e["field"] for e in candidate["source_number_evidence"]},
+            {"subtitle", "series[0].sequence"},
+        )
+        self.assertEqual(candidate["number_evidence"], [])
+        self.assertTrue(same_work({**a, "subtitle": None, "series": []}, b))
+
+    def test_number_evidence_distinguishes_installments_volumes_and_title_numbers(self):
+        for metadata, expected in [
+            (book("Example Book 13"), "series_installment"),
+            (book("Example Volume 13"), "volume"),
+            (
+                book("Example 13", series=[{"name": "Example", "sequence": "13"}]),
+                "series_installment",
+            ),
+            (book("Fahrenheit 451"), "title_number"),
+        ]:
+            with self.subTest(metadata=metadata):
+                self.assertEqual(features(metadata)["number_evidence"][0]["kind"], expected)
+        self.assertEqual(features(book("1984"))["number_evidence"], [])
+        self.assertEqual(features(book("Example (3rd Edition)"))["number_evidence"], [])
+        self.assertTrue(same_work(book("Fahrenheit 451"), book("Fahrenheit 451")))
+        self.assertFalse(same_work(book("Fahrenheit 451"), book("Fahrenheit 452")))
+        a = book(
+            "He Who Fights with Monsters 13: A LitRPG Adventure",
+            series=[{"name": "He Who Fights with Monsters", "sequence": "13"}],
+        )
+        b = book("He Who Fights with Monsters, Book 1")
+        result = compare(a, b)
+        self.assertFalse(result["plausible"])
+        self.assertIn("installment 13", " ".join(result["reasons"]))
+        self.assertIn("installment 1", " ".join(result["reasons"]))
 
     def test_fuzzy_candidates_never_choose_a_destination(self):
         result = compare(book("A Quite Distinct Long Title"), book("A Quite Different Long Title"))
@@ -214,6 +303,30 @@ class HistoryTests(SyncFixture, unittest.IsolatedAsyncioTestCase):
         result = await self.run_sync(apply=True)
         self.assertEqual(result["summary"], {"history_needs_review": 1})
         self.assertEqual(self.server.writes, [])
+
+    async def test_previously_blocked_cross_format_match_does_not_replay_history(self):
+        from abs_readwise_sync.audio_sources import save_issue, source_issue
+
+        self.server.books[0]["isbn"] = "9780140280197"
+        with database(self.settings) as con:
+            save_issue(
+                con,
+                source_issue(
+                    self.server.sources[0],
+                    "matching_review",
+                    "ISBN or ASIN differs; check the edition.",
+                ),
+            )
+            con.commit()
+        metadata = book("An Example Book", isbn="9781622318643", duration=1000)
+        with patch("abs_readwise_sync.sync.item_metadata", return_value=metadata):
+            result = await self.run_sync(apply=True)
+        self.assertEqual(result["summary"], {"history_needs_review": 1})
+        self.assertEqual(self.server.writes, [])
+        self.assertEqual(self.db().execute("select count(*) from exports").fetchone()[0], 0)
+        self.assertEqual(
+            self.db().execute("select count(*) from history_approvals").fetchone()[0], 0
+        )
 
     async def test_approval_does_not_cover_added_or_changed_old_sources(self):
         self.new_match()

@@ -138,6 +138,19 @@ def _features(encoded):
     subtitle = str(metadata.get("subtitle") or "")
     all_text = text + " " + subtitle
     books = {numeric(n) for n in re.findall(BOOK, all_text, re.I)}
+    number_evidence = []
+    for field, value in (("title", text), ("subtitle", subtitle)):
+        for match in re.finditer(BOOK, value, re.I):
+            number_evidence.append(
+                {
+                    "value": numeric(match.group(1)),
+                    "kind": "series_installment"
+                    if match.group().lower().startswith("book")
+                    else "volume",
+                    "field": field,
+                    "text": value,
+                }
+            )
     parts = {
         tuple(numeric(n) if n else "" for n in (a or c, b or d))
         for a, b, c, d in re.findall(PART, all_text, re.I)
@@ -145,13 +158,21 @@ def _features(encoded):
     series = metadata.get("series") or []
     series_names = set()
     if isinstance(series, list):
-        for entry in series:
+        for index, entry in enumerate(series):
             if not isinstance(entry, dict):
                 continue
             if entry.get("name"):
                 series_names.add(title(entry["name"]).removesuffix(" series"))
             if re.fullmatch(r"\d+(?:\.\d+)?", str(entry.get("sequence", ""))):
                 books.add(numeric(entry["sequence"]))
+                number_evidence.append(
+                    {
+                        "value": numeric(entry["sequence"]),
+                        "kind": "series_installment",
+                        "field": f"series[{index}].sequence",
+                        "text": str(entry.get("name") or "") + " " + str(entry["sequence"]),
+                    }
+                )
     editions = {normal(m.group()) for m in re.finditer(EDITION, all_text, re.I)}
     adaptation = bool(re.search(r"dramatiz|full.cast|graphic.?audio|\babridged\b", all_text, re.I))
     collection = bool(
@@ -187,6 +208,14 @@ def _features(encoded):
     trailing = re.search(r"\s+(\d+(?:\.\d+)?)\s*$", primary)
     if trailing:
         books.add(numeric(trailing.group(1)))
+        number_evidence.append(
+            {
+                "value": numeric(trailing.group(1)),
+                "kind": "series_installment" if series_names else "title_number",
+                "field": "title",
+                "text": text,
+            }
+        )
         primary = primary[: trailing.start()]
     embedded_subtitle = bool(subtitles)
     if subtitle:
@@ -206,6 +235,7 @@ def _features(encoded):
         "embedded_subtitle": embedded_subtitle and bool(meaningful),
         "authors": author_names(metadata),
         "volumes": frozenset(books),
+        "number_evidence": number_evidence,
         "parts": frozenset(parts),
         "editions": frozenset(editions),
         "adaptation": adaptation,
@@ -213,6 +243,21 @@ def _features(encoded):
         "series": frozenset(series_names),
         "identifiers": identifiers(metadata),
     }
+
+
+def describe_numbers(f, side):
+    if not f["number_evidence"]:
+        return f"{side} supplies no book or series number."
+    labels = {
+        "series_installment": "installment",
+        "volume": "volume",
+        "title_number": "title number",
+    }
+    entries = [
+        f'{labels[e["kind"]]} {e["value"]} from {e["field"]} "{e["text"]}"'
+        for e in f["number_evidence"]
+    ]
+    return side + " supplies " + "; ".join(entries) + "."
 
 
 def compare(source, target):
@@ -231,8 +276,12 @@ def compare(source, target):
         reasons.append("Primary titles differ.")
     if not authors_equal:
         reasons.append("Primary authors are missing or differ.")
-    if any(a["identifiers"][k] != b["identifiers"][k] for k in shared_ids):
-        reasons.append("ISBN or ASIN differs; check the edition.")
+    # Readwise resolves edition identifiers to the canonical ebook for a work.
+    # Audiobook and print identifiers can differ without identifying different works.
+    identifier_evidence = {
+        k: "exact" if a["identifiers"][k] == b["identifiers"][k] else "different_neutral"
+        for k in sorted(shared_ids)
+    }
     if a["subtitles"] and b["subtitles"] and a["subtitles"] != b["subtitles"]:
         reasons.append("Meaningful subtitles differ.")
     elif (
@@ -243,13 +292,15 @@ def compare(source, target):
         reasons.append("One title includes a subtitle that the other record does not supply.")
     volume_conflict = bool(a["volumes"] and b["volumes"]) and a["volumes"] != b["volumes"]
     if volume_conflict:
-        reasons.append("Book volume numbers conflict.")
+        reasons.append("Book or series numbers conflict.")
     elif a["volumes"] != b["volumes"]:
-        reasons.append("A book volume is missing on one side.")
+        reasons.append("A book or series number is supplied on only one side.")
+    if a["volumes"] != b["volumes"]:
+        reasons.extend((describe_numbers(a, "ABS"), describe_numbers(b, "Readwise")))
     if len(a["volumes"]) > 1 or len(b["volumes"]) > 1:
-        reasons.append("Conflicting volume metadata needs review.")
+        reasons.append("Conflicting book or series numbers need review.")
     if any(not re.fullmatch(r"\d+(?:\.\d+)?", v) for v in a["volumes"] | b["volumes"]):
-        reasons.append("A volume number could not be validated.")
+        reasons.append("A book or series number could not be validated.")
     if a["series"] and b["series"] and a["series"] != b["series"]:
         reasons.append("Series names differ.")
     if a["parts"] != b["parts"]:
@@ -271,6 +322,7 @@ def compare(source, target):
         "relevant": relevant,
         "plausible": relevant and not volume_conflict,
         "reasons": reasons if not eligible else [],
+        "identifier_evidence": identifier_evidence,
         "evidence": "Exact identifier with no conflicting metadata."
         if exact_id
         else "Primary title and author agree after normalization.",
@@ -299,6 +351,10 @@ def catalog_candidates(source, books):
                 "title": effective(book).get("title"),
                 "author": effective(book).get("author"),
                 "volumes": sorted(f["volumes"]),
+                # Keep volumes for existing consumers, but explain the actual marker kinds.
+                "source_number_evidence": features(source)["number_evidence"],
+                "number_evidence": f["number_evidence"],
+                "identifier_evidence": assessment["identifier_evidence"],
                 "parts": sorted(f["parts"]),
                 "subtitles": sorted(f["subtitles"]),
                 "identifiers": f["identifiers"],
