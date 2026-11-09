@@ -1,7 +1,7 @@
 FROM python:3.13-slim
 ARG BUILD_REVISION=source
 LABEL org.opencontainers.image.source="https://github.com/cliophate/audiobookshelf-readwise-sync" \
-      org.opencontainers.image.version="0.1.8" \
+      org.opencontainers.image.version="0.1.9" \
       org.opencontainers.image.revision="${BUILD_REVISION}"
 
 ENV PYTHONDONTWRITEBYTECODE=1 \

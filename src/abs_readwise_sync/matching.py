@@ -6,8 +6,8 @@ import re
 import unicodedata
 
 NUMBER = r"(?:\d+(?:\.\d+)?|one|two|three|four|five|six|seven|eight|nine|ten|[ivxlcdm]+)"
-BOOK = rf"\b(?:book|volume|vol)\s*\.?\s*#?\s*({NUMBER})\b"
-PART = rf"\bpart\s*({NUMBER})(?:\s+of\s+(\d+))?\b|\b(\d+)\s+of\s+(\d+)\b"
+BOOK = rf"(?:\b(?:book|volume|vol)\s*\.?\s*#?\s*|(?<![\w#])#\s*)({NUMBER})\b"
+PART = rf"\bpart\s*#?\s*({NUMBER})(?:\s+of\s+(\d+))?\b|\b(\d+)\s+of\s+(\d+)\b"
 EDITION = r"\b(?:(?:\d+(?:st|nd|rd|th)|first|second|third|fourth|fifth|revised|updated|expanded|updated and expanded)\s+)?edition\b"
 ROLE = r"\b(?:narrator|narrated by|translator|translated by|foreword|introduction by|lecturer|production)\b"
 CREDENTIAL = r"\b(?:ph\.?\s*d\.?|m\.?\s*d\.?|d\.?\s*phil\.?|mba|esq\.?)\s*(?=[,;&]|$)"
@@ -131,22 +131,30 @@ def features(metadata):
     return _features(json.dumps(effective(metadata), sort_keys=True, ensure_ascii=False))
 
 
+def book_markers(value):
+    parts = [m.span() for m in re.finditer(PART, value, re.I)]
+    for match in re.finditer(BOOK, value, re.I):
+        if not any(start <= match.start() and match.end() <= end for start, end in parts):
+            yield match
+
+
 @lru_cache(maxsize=8192)
 def _features(encoded):
     metadata = json.loads(encoded)
     text = str(metadata.get("title") or "")
     subtitle = str(metadata.get("subtitle") or "")
     all_text = text + " " + subtitle
-    books = {numeric(n) for n in re.findall(BOOK, all_text, re.I)}
+    books = set()
     number_evidence = []
     for field, value in (("title", text), ("subtitle", subtitle)):
-        for match in re.finditer(BOOK, value, re.I):
+        for match in book_markers(value):
+            books.add(numeric(match.group(1)))
             number_evidence.append(
                 {
                     "value": numeric(match.group(1)),
-                    "kind": "series_installment"
-                    if match.group().lower().startswith("book")
-                    else "volume",
+                    "kind": "volume"
+                    if match.group().lower().startswith("vol")
+                    else "series_installment",
                     "field": field,
                     "text": value,
                 }
@@ -190,7 +198,7 @@ def _features(encoded):
 
     def bracket(match):
         inner = match.group(1)
-        if re.search(BOOK, inner, re.I):
+        if list(book_markers(inner)):
             name = title(re.sub(BOOK, "", inner, flags=re.I)).removesuffix(" series")
             if name:
                 series_names.add(name)
@@ -222,7 +230,7 @@ def _features(encoded):
         subtitles.append(subtitle)
     meaningful = set()
     for value in subtitles:
-        if re.search(BOOK, value, re.I):
+        if list(book_markers(value)):
             series_label = title(re.sub(BOOK, "", value, flags=re.I)).removesuffix(" series")
             if series_label in series_names:
                 continue

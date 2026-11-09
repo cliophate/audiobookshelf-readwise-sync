@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.9 - 2026-11-09
+
+### Fixed
+
+- Series annotations such as `#1`, `#13` and `Series, #8` now supply installment numbers. Explicitly different installments are rejected rather than remaining plausible and causing false ambiguity. Audio parts remain separate from book numbers, and meaningful subtitles and competing candidates keep their checks.
+- `--map` can save a split-book or collection choice. It reports `needs_policy`; progress imports, duration setup and shelf changes remain blocked for that new mapping. No history is approved. Reassignment of an existing destination remains blocked.
+- Preview and apply logs include the author and available subtitle. Candidate titles stay on one line. Shelf-only entries show the book status and `no session actions` instead of `{}`; an unset shelf is labelled explicitly. Identity-label changes are visible even when the underlying issue is unchanged.
+
+### Safety and tests
+
+- Exact ISBN/ASIN matches still do not approve previously held history. Existing mappings, exports and checkpoints remain intact. Added regressions cover the reported hash-number conflicts, duplicate candidates, split and collection mappings, blocked shelf and duration writes, history holds and clearer logs.
+
 ## 0.1.8 - 2026-11-07
 
 ### Fixed

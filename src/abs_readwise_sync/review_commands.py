@@ -44,10 +44,7 @@ def save_mapping(con, settings, item_id, book):
         raise SyncError(
             "An existing mapping or saved binding points elsewhere. Its history will not be reassigned."
         )
-    if requires_progress_policy(metadata, book):
-        raise SyncError(
-            "Split audiobooks and collections need a progress policy before a new mapping can be saved."
-        )
+    needs_policy = requires_progress_policy(metadata, book)
     # Keep this boundary even if a file write fails. It only holds history, never sends it.
     if not saved:
         with con:
@@ -77,6 +74,12 @@ def save_mapping(con, settings, item_id, book):
         "abs_item_id": item_id,
         "readwise_book_id": bid,
         "remote_writes": 0,
-        "reason": "Mapping saved. Run a preview to review any older sessions before --apply.",
+        "progress_status": "needs_policy" if needs_policy else "review_history",
+        "reason": (
+            "Mapping saved. Split or collection progress remains blocked until an explicit "
+            "progress policy is supported. No history was approved."
+            if needs_policy
+            else "Mapping saved. Run a preview to review any older sessions before --apply."
+        ),
         "matching_notes": compare(metadata, book)["reasons"],
     }

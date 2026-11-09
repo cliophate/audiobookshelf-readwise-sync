@@ -7,10 +7,25 @@ import json
 QUIET = {"existing", "recent", "before_import_since"}
 
 
+def book_label(book):
+    def single_line(value):
+        return " ".join(str(value or "").split())
+
+    title = single_line(book.get("title")) or "Untitled"
+    subtitle = single_line(book.get("subtitle"))
+    author = single_line(book.get("author"))
+    if subtitle and subtitle.casefold() not in title.casefold():
+        title += ": " + subtitle
+    return title + (" by " + author if author else "")
+
+
 def render(result, previous=None, *, show_all=False):
     previous = previous or {}
     current = {}
-    lines = [f"{result['mode']}: {json.dumps(result['summary'], sort_keys=True)}"]
+    summary = (
+        json.dumps(result["summary"], sort_keys=True) if result["summary"] else "no session actions"
+    )
+    lines = [f"{result['mode']}: {summary}"]
     repeated = 0
 
     def emit(key, body):
@@ -33,6 +48,7 @@ def render(result, previous=None, *, show_all=False):
         reasons = sorted({s["reason"] for s in sessions if s.get("reason")})
         matching = book.get("matching", {})
         body = {
+            "book": book_label(book),
             "counts": counts,
             "reasons": reasons,
             "sources": sorted((s["source_id"], s["status"], s.get("reason")) for s in sessions),
@@ -43,8 +59,9 @@ def render(result, previous=None, *, show_all=False):
         }
         if not emit("book:" + book["abs_item_id"], body):
             continue
+        activity = str(counts) if counts else f"{book['status']}; no session actions"
         lines.append(
-            f"  {book['title']} | ABS {book['abs_item_id']} | Readwise {book['readwise_book_id'] or 'unmatched'} | {counts}"
+            f"  {book_label(book)} | ABS {book['abs_item_id']} | Readwise {book['readwise_book_id'] or 'unmatched'} | {activity}"
         )
         if book["status"] in (
             "unmatched",
@@ -56,7 +73,7 @@ def render(result, previous=None, *, show_all=False):
             lines.append("    Match: " + matching.get("reason", book["status"]))
             for candidate in matching.get("candidates", []):
                 lines.append(
-                    f"    Candidate {candidate['id']}: {candidate['title']} / {candidate['author']} | {candidate['status']}. "
+                    f"    Candidate {candidate['id']}: {book_label(candidate)} | {candidate['status']}. "
                     + " ".join(candidate["reasons"])
                 )
             if matching.get("candidate_count", 0) > len(matching.get("candidates", [])):
@@ -69,7 +86,7 @@ def render(result, previous=None, *, show_all=False):
             lines.append("    Length: " + book["length_help"])
         if shelf:
             lines.append(
-                f"    Shelf: {shelf['current']} -> {shelf['desired']} ({shelf['status']})"
+                f"    Shelf: {shelf['current'] or 'unmapped'} -> {shelf['desired'] or 'undetermined'} ({shelf['status']})"
                 + (" " + shelf["reason"] if shelf.get("reason") else "")
             )
         if book.get("history_review"):

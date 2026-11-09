@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "audiobookshelf-readwise-sync"
-version = "0.1.8"
+version = "0.1.9"
 description = "Import Audiobookshelf listening sessions into Readwise Books."
 requires-python = ">=3.12"
 dependencies = [

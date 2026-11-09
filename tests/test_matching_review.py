@@ -4,6 +4,7 @@ import contextlib
 import dataclasses
 import io
 import json
+import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
@@ -273,6 +274,75 @@ class MatcherTests(unittest.TestCase):
         self.assertFalse(result["eligible"])
         self.assertIn("Primary titles differ.", result["reasons"])
 
+    def test_hash_installments_reject_wrong_books_in_the_reported_series(self):
+        source_book = book(
+            "Defiance of the Fall 13 (Unabridged)",
+            "Thefirstdefier",
+            series=[{"name": "Defiance of the Fall", "sequence": "13"}],
+        )
+        for number in (1, 3, 13, 16, 17):
+            target = book(
+                f"Defiance of the Fall\n(Defiance of the Fall #{number})", "Thefirstdefier"
+            )
+            with self.subTest(number=number):
+                result = compare(source_book, target)
+                self.assertEqual(features(target)["volumes"], frozenset({str(number)}))
+                self.assertEqual(result["eligible"], number == 13)
+                self.assertEqual(result["plausible"], number == 13)
+                self.assertEqual(
+                    features(target)["number_evidence"][0]["kind"], "series_installment"
+                )
+        candidates = [
+            book(f"Defiance of the Fall (Defiance of the Fall #{n})", "Thefirstdefier", id=n)
+            for n in (1, 3, 13)
+        ]
+        with contextlib.closing(sqlite3.connect(":memory:")) as con:
+            con.execute("create table books(work text, book_id text)")
+            self.assertEqual(resolve_book(con, "example", source_book, candidates, {})[0]["id"], 13)
+
+    def test_hash_series_without_matching_authors_still_needs_review(self):
+        a = book("Defiance of the Fall 13", "Another Author")
+        candidates = catalog_candidates(
+            a,
+            [
+                book(f"Defiance of the Fall (Defiance of the Fall #{n})", "Thefirstdefier", id=n)
+                for n in (1, 13)
+            ],
+        )
+        self.assertEqual(
+            {c["id"]: c["status"] for c in candidates}, {"13": "review", "1": "rejected"}
+        )
+
+    def test_hash_markers_preserve_parts_collections_and_identifier_conflicts(self):
+        for text in (
+            "Example (Example, #13)",
+            "Example [Example #13]",
+            "Example #13",
+            "Example Book #13",
+            "Example Vol. #13",
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(features(book(text))["volumes"], frozenset({"13"}))
+        part = features(book("Example (Part #1 of 2)"))
+        self.assertEqual(part["volumes"], frozenset())
+        self.assertEqual(part["parts"], frozenset({("1", "2")}))
+        self.assertFalse(same_work(book("Example (Part #1 of 2)"), book("Example")))
+        self.assertFalse(same_work(book("Example (Example #1-100)"), book("Example #1")))
+        self.assertFalse(
+            same_work(book("Example #13", asin="B012345678"), book("Example #1", asin="B012345678"))
+        )
+        self.assertEqual(features(book("C# Programming"))["number_evidence"], [])
+        self.assertEqual(features(book("The Book", subtitle="13 stories"))["number_evidence"], [])
+
+    def test_hash_installments_keep_real_subtitles_and_duplicate_candidates(self):
+        a = book("Example 13: Biology")
+        self.assertFalse(same_work(a, book("Example: Astronomy (Example #13)")))
+        candidates = catalog_candidates(
+            book("Example 13"),
+            [book("Example (Example #13)", id=1), book("Example (Example #13)", id=2)],
+        )
+        self.assertEqual([c["status"] for c in candidates], ["ready", "ready"])
+
 
 class HistoryTests(SyncFixture, unittest.IsolatedAsyncioTestCase):
     def new_match(self):
@@ -451,7 +521,7 @@ class HistoryTests(SyncFixture, unittest.IsolatedAsyncioTestCase):
             self.assertEqual(data["abs_item_id"], "item-1")
         self.assertEqual(json.loads(self.settings.mappings_file.read_text()), {"item-1": "42"})
 
-    async def test_deleted_target_and_split_part_mapping_are_rejected(self):
+    async def test_deleted_target_is_rejected_but_split_mapping_is_saved_without_exports(self):
         await self.run_sync()
         with database(self.settings) as con:
             with self.assertRaisesRegex(SyncError, "deleted"):
@@ -466,15 +536,60 @@ class HistoryTests(SyncFixture, unittest.IsolatedAsyncioTestCase):
                 "update source_items set data_json=? where id='item-1'", (json.dumps(item),)
             )
             con.commit()
-            with self.assertRaisesRegex(SyncError, "progress policy"):
-                save_mapping(con, self.settings, "item-1", self.server.books[0])
+            result = save_mapping(con, self.settings, "item-1", self.server.books[0])
+            self.assertEqual(result["progress_status"], "needs_policy")
+            self.assertEqual(result["remote_writes"], 0)
             self.assertEqual(
                 resolve_book(
                     con, "item-1", item_metadata(item), self.server.books, {"item-1": "42"}
                 )[1],
                 "matching_review",
             )
-        self.assertFalse(self.settings.mappings_file.exists())
+        self.assertEqual(json.loads(self.settings.mappings_file.read_text()), {"item-1": "42"})
+        with patch("abs_readwise_sync.sync.item_metadata", return_value=item_metadata(item)):
+            result = await self.run_sync(apply=True)
+        self.assertEqual(result["summary"], {"matching_review": 1})
+        self.assertEqual(self.server.writes, [])
+        self.assertEqual(self.db().execute("select count(*) from exports").fetchone()[0], 0)
+        self.assertEqual(
+            self.db().execute("select count(*) from history_approvals").fetchone()[0], 0
+        )
+
+    async def test_collection_mapping_can_be_saved_but_history_stays_blocked(self):
+        await self.run_sync()
+        metadata = book("An Example Book 1 - 100", duration=1000)
+        with database(self.settings) as con:
+            item = json.loads(
+                con.execute("select data_json from source_items where id='item-1'").fetchone()[0]
+            )
+            item["media"]["metadata"]["title"] = metadata["title"]
+            con.execute(
+                "update source_items set data_json=? where id='item-1'", (json.dumps(item),)
+            )
+            con.commit()
+            self.assertEqual(
+                save_mapping(con, self.settings, "item-1", self.server.books[0])["progress_status"],
+                "needs_policy",
+            )
+        with patch("abs_readwise_sync.sync.item_metadata", return_value=metadata):
+            result = await self.run_sync(apply=True)
+        self.assertEqual(result["summary"], {"matching_review": 1})
+        self.assertEqual(self.server.writes, [])
+
+    async def test_exact_identifier_does_not_approve_previously_unmatched_history(self):
+        self.server.books = []
+        await self.run_sync()
+        self.server.books = [book("An Example Book", asin="B012345678", manual_total_seconds=1000)]
+        with patch(
+            "abs_readwise_sync.sync.item_metadata",
+            return_value=book("An Example Book", asin="B012345678", duration=1000),
+        ):
+            result = await self.run_sync(apply=True)
+        self.assertEqual(result["summary"], {"history_needs_review": 1})
+        self.assertEqual(self.server.writes, [])
+        self.assertEqual(
+            self.db().execute("select count(*) from history_approvals").fetchone()[0], 0
+        )
 
     async def test_duplicate_active_identifiers_and_partial_candidates_are_ambiguous(self):
         self.server.books.append(
@@ -549,6 +664,56 @@ class HistoryTests(SyncFixture, unittest.IsolatedAsyncioTestCase):
 
 
 class LogTests(SyncFixture, unittest.IsolatedAsyncioTestCase):
+    async def test_preview_and_apply_labels_include_author_and_subtitle(self):
+        result = await self.run_sync()
+        entry = result["books"][0]
+        entry.update(title="Timeless", subtitle="A Drizzt Novel", author="R. A. Salvatore")
+        for mode in ("preview", "apply"):
+            result["mode"] = mode
+            lines, _ = render(result)
+            self.assertIn("Timeless: A Drizzt Novel by R. A. Salvatore", "\n".join(lines))
+        entry["title"] = "Timeless: A Drizzt Novel"
+        lines, _ = render(result)
+        self.assertNotIn("A Drizzt Novel: A Drizzt Novel", "\n".join(lines))
+
+    async def test_shelf_only_rows_explain_empty_session_counts(self):
+        result = await self.run_sync()
+        result["summary"] = {}
+        entry = result["books"][0]
+        entry.update(
+            status="unmatched",
+            readwise_book_id=None,
+            sessions=[],
+            matching={"reason": "No plausible existing library entry was found."},
+            shelf={
+                "current": None,
+                "desired": "finished",
+                "status": "needs_book",
+                "reason": "Add and map the book.",
+            },
+        )
+        lines, _ = render(result)
+        text = "\n".join(lines)
+        self.assertNotIn("{}", text)
+        self.assertNotIn("None ->", text)
+        self.assertIn("unmatched; no session actions", text)
+        self.assertIn("Shelf: unmapped -> finished (needs_book)", text)
+        self.assertIn("No plausible existing library entry was found.", text)
+
+    async def test_candidate_titles_are_single_line_and_identity_changes_are_visible(self):
+        self.server.books[0].update(title="An Example Book\n(Unabridged)", author="Another Author")
+        result = await self.run_sync()
+        lines, saved = render(result)
+        self.assertTrue(
+            any(
+                "Candidate 42: An Example Book (Unabridged) by Another Author" in line
+                for line in lines
+            )
+        )
+        result["books"][0]["author"] = "Corrected Author"
+        changed, _ = render(result, saved)
+        self.assertIn("by Corrected Author", "\n".join(changed))
+
     async def test_default_logs_explain_matches_and_deduplicate_unchanged_issues(self):
         self.server.books[0]["author"] = "Another Author"
         result = await self.run_sync()
@@ -596,6 +761,21 @@ class LogTests(SyncFixture, unittest.IsolatedAsyncioTestCase):
 
 
 class ShelfHistoryTests(ShelfFixture, unittest.IsolatedAsyncioTestCase):
+    async def test_saved_split_mapping_cannot_set_duration_import_or_finish(self):
+        self.enable()
+        self.metadata["item-1"] = {"title": "An Example Book (Part 1 of 2)"}
+        self.server.books[0]["manual_total_seconds"] = None
+        await self.run_sync()
+        with database(self.settings) as con:
+            self.assertEqual(
+                save_mapping(con, self.settings, "item-1", self.server.books[0])["progress_status"],
+                "needs_policy",
+            )
+        result = await self.run_sync(apply=True)
+        self.assertEqual(result["summary"], {"matching_review": 1})
+        self.assertEqual(result["shelf_summary"], {"needs_review": 1})
+        self.assertEqual(self.server.writes, [])
+
     async def test_matching_and_history_review_block_shelf_changes(self):
         self.enable()
         self.server.books[0]["title"] = "Example Book"
